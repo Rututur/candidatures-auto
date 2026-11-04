@@ -1,0 +1,11 @@
+# Personal data never goes to the (public) repository
+*.xlsx
+*.xlsm
+*.pdf
+*.docx
+settings.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/

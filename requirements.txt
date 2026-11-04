@@ -1,0 +1,5 @@
+# Desktop app (the GitHub watcher needs nothing beyond the standard library)
+openpyxl>=3.1
+keyring>=24
+tzdata
+websocket-client>=1.6

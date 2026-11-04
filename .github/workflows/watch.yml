@@ -1,0 +1,42 @@
+name: Surveillance des réponses
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may delay runs a little)
+  workflow_dispatch:          # "Run workflow" button, handy for testing
+
+permissions:
+  contents: read
+  actions: write              # needed by the keep-alive step below
+
+concurrency:
+  group: watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # The watcher only uses the standard library: no pip install needed.
+      - name: Check Gmail and notify on Discord
+        run: python3 -m watcher.watch
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
+          REMINDER_DAYS: ${{ vars.REMINDER_DAYS }}
+          ALERT_MAX_AGE_HOURS: ${{ vars.ALERT_MAX_AGE_HOURS }}
+
+      # GitHub pauses scheduled workflows after 60 days without activity on
+      # the repository. Re-enabling the workflow through the API resets that
+      # timer, so the schedule keeps running as long as needed.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/watch.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
