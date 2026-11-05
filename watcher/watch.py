@@ -23,13 +23,15 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from common.classify import KIND_AUTO, KIND_BOUNCE, KIND_POSITIVE, KIND_REFUSAL, classify
-from common.discord_dm import COLOR_BLUE, COLOR_GREEN, COLOR_GREY, COLOR_ORANGE, COLOR_RED, DiscordDM
+from common.discord_dm import COLOR_BLUE, COLOR_GREEN, COLOR_GREY, COLOR_ORANGE, COLOR_RED, DiscordDM, DiscordError
 from common.gmail import (
     LABEL_AUTO_REPLY,
     LABEL_NOTIFIED,
     LABEL_REMINDED,
     LABEL_SENT,
+    FolderNotFound,
     GmailClient,
+    GmailError,
     gmail_thread_url,
 )
 from common.tracking import Reply, SentApplication, find_replies, load_applications
@@ -53,7 +55,11 @@ DEFAULT_STYLE = ("❔", "À lire, pas d'estimation possible", COLOR_BLUE)
 def env(name: str, default: str | None = None) -> str:
     value = os.environ.get(name, default)
     if value is None or value == "":
-        sys.exit(f"Missing environment variable {name}")
+        sys.exit(
+            f"Missing environment variable {name}. "
+            "On GitHub: add it under Settings > Secrets and variables > Actions. "
+            "On your PC: see the README, the syntax depends on the terminal."
+        )
     return value
 
 
@@ -121,9 +127,13 @@ def run() -> int:
     with GmailClient(account, password) as client:
         if not dry_run:
             client.ensure_labels()
-        applications = load_applications(client)
+        try:
+            applications = load_applications(client)
+        except FolderNotFound:  # dry run on a mailbox where the labels were never created
+            applications = {}
         print(f"Tracked recipients: {len(applications)}")
         if not applications:
+            print(f"Nothing to watch yet: no sent e-mail carries the label {LABEL_SENT}.")
             return 0
 
         replies = find_replies(client, applications)  # leaves All Mail selected
@@ -172,4 +182,7 @@ def run() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    try:
+        sys.exit(run())
+    except (GmailError, DiscordError) as exc:
+        sys.exit(f"Error: {exc}")

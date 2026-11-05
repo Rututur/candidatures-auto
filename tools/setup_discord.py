@@ -3,7 +3,7 @@
 Discord requires a bot to have connected to its gateway at least once before
 it can send messages. Run this script once on your PC after creating the bot:
 
-    python tools/setup_discord.py
+    .venv\\Scripts\\python tools\\setup_discord.py
 
 It asks for the bot token and your Discord user id (nothing is saved).
 Requires the "websocket-client" package (installed by requirements.txt).
@@ -16,6 +16,8 @@ import json
 import os
 import sys
 
+import websocket  # websocket-client
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.discord_dm import COLOR_GREEN, DiscordDM, DiscordError  # noqa: E402
@@ -24,8 +26,6 @@ GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 
 
 def identify_once(token: str) -> str:
-    import websocket  # websocket-client
-
     ws = websocket.create_connection(GATEWAY, timeout=20)
     try:
         hello = json.loads(ws.recv())
@@ -40,9 +40,11 @@ def identify_once(token: str) -> str:
             },
         }))
         while True:
-            event = json.loads(ws.recv())
-            if event.get("op") == 9:
-                raise RuntimeError("Invalid token (gateway refused the identification)")
+            raw = ws.recv()
+            # A bad token closes the connection (code 4004): recv() then returns "".
+            event = json.loads(raw) if raw else None
+            if event is None or event.get("op") == 9:
+                raise RuntimeError("Discord a refusé le token du bot. Refais « Reset Token » et copie le nouveau.")
             if event.get("t") == "READY":
                 user = event["d"]["user"]
                 return f"{user['username']}"
@@ -61,7 +63,11 @@ def main() -> int:
             "description": "Tu recevras ici un message à chaque réponse d'entreprise et les rappels de relance.",
             "color": COLOR_GREEN,
         })
-    except (DiscordError, RuntimeError, OSError) as exc:
+    except (OSError, websocket.WebSocketException) as exc:
+        print(f"Connexion à Discord impossible : {exc}")
+        print("Vérifie ta connexion internet (VPN, pare-feu), puis relance le script.")
+        return 1
+    except (DiscordError, RuntimeError) as exc:
         print(f"Échec : {exc}")
         print("Vérifie le token, ton identifiant, que le bot est sur un serveur où tu es, "
               "et que tu acceptes les messages privés des membres de ce serveur.")

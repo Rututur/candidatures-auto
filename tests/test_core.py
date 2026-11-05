@@ -109,6 +109,38 @@ def mailbox():
     ])
 
 
+class SelectTest(unittest.TestCase):
+    def client_with_select_answer(self, data):
+        client = gmail.GmailClient(ME, "x")
+        client.imap = mock.Mock()
+        client.imap.select.return_value = ("NO", data)
+        return client
+
+    def test_missing_label_raises_folder_not_found(self):
+        client = self.client_with_select_answer([b"[NONEXISTENT] Unknown Mailbox: Candidatures/Envoyees (Failure)"])
+        with self.assertRaises(gmail.FolderNotFound):
+            client.select(LABEL_SENT)
+
+    def test_other_refusal_stays_a_generic_error(self):
+        client = self.client_with_select_answer([b"[UNAVAILABLE] Temporary failure"])
+        with self.assertRaises(gmail.GmailError) as caught:
+            client.select(LABEL_SENT)
+        self.assertNotIsInstance(caught.exception, gmail.FolderNotFound)
+
+
+class DiscordSetupTest(unittest.TestCase):
+    def test_invalid_token_gives_a_readable_error(self):
+        from tools import setup_discord
+
+        ws = mock.Mock()
+        # Discord greets the client, then closes the connection on a bad token.
+        ws.recv.side_effect = ['{"op": 10, "d": {"heartbeat_interval": 41250}}', ""]
+        with mock.patch.object(setup_discord.websocket, "create_connection", return_value=ws):
+            with self.assertRaisesRegex(RuntimeError, "token"):
+                setup_discord.identify_once("bad-token")
+        ws.close.assert_called_once()
+
+
 class TrackingTest(unittest.TestCase):
     def test_find_replies(self):
         box = mailbox()
@@ -155,6 +187,17 @@ class WatcherTest(unittest.TestCase):
         # Second run: nothing new to say.
         sent_again, _ = self.run_watcher(box)
         self.assertEqual(sent_again, [])
+
+    def test_dry_run_on_mailbox_without_labels(self):
+        from watcher import watch
+
+        box = FakeGmail(ME, [])
+        env = {"GMAIL_ADDRESS": ME, "GMAIL_APP_PASSWORD": "x", "DRY_RUN": "1"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(watch, "GmailClient", lambda *a: box), \
+                mock.patch.object(box, "select", side_effect=gmail.FolderNotFound("missing")), \
+                redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(watch.run(), 0)
+        self.assertIn("Tracked recipients: 0", out.getvalue())
 
 
 if __name__ == "__main__":

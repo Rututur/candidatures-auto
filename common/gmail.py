@@ -42,6 +42,10 @@ class GmailError(Exception):
     """Raised when Gmail refuses a command or the login fails."""
 
 
+class FolderNotFound(GmailError):
+    """Raised when selecting a folder or label that does not exist yet."""
+
+
 @dataclass
 class MessageInfo:
     uid: int
@@ -237,7 +241,8 @@ class GmailClient:
     def select(self, folder: str, readonly: bool = True) -> int:
         typ, data = self.imap.select(quote_imap(folder), readonly=readonly)
         if typ != "OK":
-            raise GmailError(f"Could not open folder {folder}: {data!r}")
+            missing = b"NONEXISTENT" in b" ".join(d or b"" for d in data).upper()
+            raise (FolderNotFound if missing else GmailError)(f"Could not open folder {folder}: {data!r}")
         self.selected = folder
         return int(data[0] or 0)
 

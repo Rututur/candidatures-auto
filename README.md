@@ -17,6 +17,28 @@ tests/      python -m unittest
 
 ---
 
+## Démarrage rapide : l'ordre à suivre
+
+Le bot ne peut pas fonctionner tant que ces 5 points ne sont pas faits, dans cet ordre :
+
+| # | À faire | Comment vérifier que c'est bon |
+|---|---|---|
+| 1 | Créer le mot de passe d'application Gmail ([§1](#1-préparer-gmail-5-min)) | Tu as 16 lettres |
+| 2 | Lancer `lancer.bat` et remplir les réglages ([§2](#2-installer-lapplication-sur-ton-pc)) | « Tester la connexion Gmail » réussit |
+| 3 | Créer le bot et lancer `setup_discord.py` ([§3](#3-créer-le-bot-discord-10-min)) | Tu reçois un message privé du bot |
+| 4 | Ajouter les 4 secrets sur GitHub ([§4](#4-mettre-la-surveillance-sur-github-10-min)) | « Run workflow » finit en vert |
+| 5 | Envoyer une vraie candidature depuis l'application | Le journal affiche `Tracked recipients: 1` ou plus |
+
+> **Le bot ne se lance pas depuis ton PC.** C'est GitHub qui l'exécute. Ton PC sert seulement à l'étape de préparation et aux tests. Si une commande échoue, va voir le [dépannage](#dépannage).
+
+### Dans quel terminal taper les commandes ?
+
+Dans VS Code : menu **Terminal → Nouveau terminal**. Toutes les commandes se lancent **depuis le dossier du projet** (celui qui contient `lancer.bat`).
+
+Regarde le début de la ligne : `PS C:\...>` veut dire **PowerShell**, et `C:\...>` veut dire **invite de commandes (cmd)**. La syntaxe des variables n'est pas la même : `set NOM=valeur` **ne fonctionne pas dans PowerShell**, et n'affiche même pas d'erreur.
+
+---
+
 ## 1. Préparer Gmail (5 min)
 
 1. Active la **validation en 2 étapes** sur ton compte Google : <https://myaccount.google.com/security>.
@@ -60,15 +82,17 @@ Les candidatures déjà envoyées avant l'outil (statut `Envoyée`/`Relancée`) 
 3. Menu **OAuth2 → URL Generator** : coche le scope **bot** (aucune permission nécessaire), ouvre l'URL générée et ajoute le bot à **un serveur où tu es** (crée-en un vide si besoin). C'est obligatoire pour qu'il puisse t'écrire en privé.
 4. Dans Discord → Paramètres → Avancés → active le **Mode développeur**. Puis clic droit sur ton nom → **Copier l'identifiant de l'utilisateur**.
 5. Vérifie que tu acceptes les messages privés des membres de ce serveur (clic droit sur le serveur → Paramètres de confidentialité).
-6. Dans le dossier du projet, ouvre un terminal et lance une seule fois :
+6. Lance `lancer.bat` au moins une fois si ce n'est pas fait (il crée le dossier `.venv`). Ensuite, dans le dossier du projet, ouvre un terminal et lance une seule fois (la commande est la même dans PowerShell et cmd) :
    ```
    .venv\Scripts\python tools\setup_discord.py
    ```
-   Le script connecte le bot (Discord l'exige une première fois) et t'envoie un message de test.
+   Le script te demande le token, puis ton identifiant. **Rien ne s'affiche quand tu colles le token, c'est normal.** Colle-le une seule fois (clic droit si Ctrl+V ne fait rien), puis appuie sur Entrée.
+
+   Le script connecte le bot (Discord l'exige une première fois) et t'envoie un message de test. Tu dois voir `Message de test envoyé` et recevoir le message sur Discord.
 
 ## 4. Mettre la surveillance sur GitHub (10 min)
 
-1. Crée un dépôt **public** sur GitHub (ex. `candidatures-auto`) et envoie-y ce dossier. Le `.gitignore` exclut déjà les `.xlsx`, `.pdf` et `.venv`.
+1. Crée un dépôt **public** sur GitHub (ex. `candidatures-auto`) et envoie-y ce dossier. Le `.gitignore` exclut déjà les `.xlsx`, `.pdf` et `.venv`. Remplace `<ton-pseudo>` par ton pseudo GitHub, sans les chevrons.
    ```
    git init
    git add .
@@ -77,15 +101,54 @@ Les candidatures déjà envoyées avant l'outil (statut `Envoyée`/`Relancée`) 
    git remote add origin https://github.com/<ton-pseudo>/candidatures-auto.git
    git push -u origin main
    ```
+   **Si le dépôt existe déjà**, n'utilise pas ces commandes. Pour envoyer tes modifications, il suffit de faire :
+   ```
+   git add .
+   git commit -m "Description de la modification"
+   git push
+   ```
 2. Dans le dépôt → **Settings → Secrets and variables → Actions** :
-   - onglet **Secrets** → *New repository secret*, 4 fois :
-     `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `DISCORD_BOT_TOKEN`, `DISCORD_USER_ID`
+   - onglet **Secrets** → *New repository secret*, 4 fois. Les noms doivent être **exactement** ceux-ci :
+
+     | Nom du secret | Valeur |
+     |---|---|
+     | `GMAIL_ADDRESS` | ton adresse Gmail |
+     | `GMAIL_APP_PASSWORD` | les 16 lettres de l'étape 1 (pas ton mot de passe Google) |
+     | `DISCORD_BOT_TOKEN` | le token de l'étape 3 |
+     | `DISCORD_USER_ID` | ton identifiant Discord, une suite de chiffres (pas ton pseudo) |
+
+     Si tu refais « Reset Token » sur Discord, l'ancien token ne marche plus : mets aussi le secret à jour.
    - onglet **Variables** (facultatif) : `REMINDER_DAYS` = `7` (mets la même valeur que dans l'application).
-3. Onglet **Actions** → « Surveillance des réponses » → **Run workflow** pour un premier essai. Ensuite, ça tourne seul toutes les 10 minutes.
+3. Onglet **Actions** → « Surveillance des réponses » → **Run workflow** pour un premier essai. Ensuite, ça tourne seul.
+4. Rafraîchis la page, clique sur l'exécution, puis sur **watch**, puis sur l'étape **Check Gmail and notify on Discord** pour lire le résultat :
+
+   | Ce que tu lis | Ce que ça veut dire |
+   |---|---|
+   | Coche verte, `Tracked recipients: 0` | La connexion à Gmail marche et les 4 secrets existent, mais il n'y a **rien à surveiller pour l'instant** : voir ci-dessous. |
+   | Coche verte, `Tracked recipients: 3` (par exemple) | La connexion à Gmail marche et 3 adresses sont suivies. |
+   | Croix rouge | Le message d'erreur explique pourquoi : voir le [dépannage](#dépannage). |
+
+   Une coche verte ne prouve pas que `DISCORD_BOT_TOKEN` et `DISCORD_USER_ID` sont corrects : le bot ne contacte Discord que lorsqu'il a un message à envoyer. Seul le premier message reçu le confirme (voir [Tester toute la chaîne](#tester-toute-la-chaîne-facultatif)).
+
+### Pourquoi `Tracked recipients: 0` ?
+
+Le bot surveille seulement les mails qui portent le libellé `Candidatures/Envoyees`. Ce libellé est posé :
+- quand tu envoies une candidature depuis l'application, **hors mode test** ;
+- quand l'application se synchronise, sur les candidatures déjà envoyées à la main si leur statut est `Envoyée` ou `Relancée` dans le tableur.
+
+Les mails du **mode test ne sont pas suivis** : ils partent vers ta propre adresse et ne reçoivent pas le libellé.
+
+### Tester toute la chaîne (facultatif)
+
+1. Dans le tableur, ajoute une ligne de test avec **une autre adresse à toi** (pas celle du compte Gmail utilisé par l'outil).
+2. Décoche le mode test et envoie-lui une candidature depuis l'application. **Vérifie bien le récapitulatif : seule cette ligne doit être cochée.**
+3. Depuis cette autre adresse, réponds au mail.
+4. Sur GitHub, clique sur **Run workflow** : tu reçois le message privé sur Discord.
+5. Supprime la ligne de test du tableur et retire le libellé `Candidatures/Envoyees` de ce mail dans Gmail.
 
 Bon à savoir :
 - **Les secrets restent secrets**, même dans un dépôt public. Par contre, **les journaux des exécutions sont publics**. Le script n'y écrit que des nombres, jamais d'adresse, de nom ou d'objet.
-- GitHub peut décaler une exécution de quelques minutes quand ses serveurs sont chargés.
+- **« Toutes les 10 minutes » est un maximum, pas une garantie.** GitHub peut retarder ou sauter des exécutions planifiées, parfois pendant plusieurs heures, surtout sur un dépôt récent. Pour tester, utilise toujours **Run workflow** sans attendre.
 - Au premier passage, les réponses de plus de 72 h sont marquées comme vues **sans** t'envoyer de message, pour ne pas te noyer sous l'historique.
 - GitHub met en pause les tâches planifiées après 60 jours d'inactivité d'un dépôt. Le workflow se réactive lui-même à chaque passage pour l'éviter.
 
@@ -115,13 +178,46 @@ Pour arrêter le suivi d'une entreprise, retire le libellé `Candidatures/Envoye
 .venv\Scripts\python -m unittest
 ```
 
-Pour tester la surveillance sur ton PC sans rien envoyer sur Discord ni modifier Gmail :
+### Tester la surveillance sur ton PC
+
+Ce test lit ta boîte Gmail sans rien envoyer sur Discord et sans modifier Gmail. Il vérifie seulement la partie Gmail. Les variables ne durent que le temps du terminal : ferme-le après le test.
+
+**Dans PowerShell** (`PS C:\...>`, le terminal par défaut de VS Code) :
+```powershell
+$env:GMAIL_ADDRESS = "ton.adresse@gmail.com"
+$env:GMAIL_APP_PASSWORD = Read-Host "Mot de passe d'application"
+$env:DRY_RUN = "1"
+.venv\Scripts\python -m watcher.watch
 ```
+`Read-Host` évite que le mot de passe soit enregistré dans l'historique de PowerShell, mais il reste visible à l'écran pendant que tu le tapes.
+
+**Dans l'invite de commandes** (`C:\...>`, cmd) :
+```bat
 set GMAIL_ADDRESS=ton.adresse@gmail.com
 set GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx
 set DRY_RUN=1
 .venv\Scripts\python -m watcher.watch
 ```
+
+Résultat attendu : `Tracked recipients: 0` si aucun mail n'est suivi pour l'instant, sinon ce nombre suivi des messages `[dry-run]` et d'une ligne `Replies found: ...`.
+
+## Dépannage
+
+| Message | Cause | Solution |
+|---|---|---|
+| `Missing environment variable GMAIL_ADDRESS` **sur ton PC** | Tu as utilisé `set` dans PowerShell, ou tu as ouvert un nouveau terminal | Utilise `$env:GMAIL_ADDRESS = "..."` ([voir ci-dessus](#tester-la-surveillance-sur-ton-pc)) |
+| `Missing environment variable ...` **sur GitHub** | Le secret n'existe pas ou son nom est mal écrit | Crée-le dans *Settings → Secrets and variables → Actions*, onglet **Secrets** (pas *Variables*) |
+| `IMAP login failed: [AUTHENTICATIONFAILED]` | Mauvaise adresse, ou mot de passe Google normal au lieu du mot de passe d'application | Recrée un mot de passe d'application et mets à jour le secret |
+| `Special folder \All not found` | Le dossier « Tous les messages » est masqué pour IMAP | Gmail → Paramètres → *Libellés* → coche « Afficher dans IMAP » pour Tous les messages et Messages envoyés |
+| `Discord a refusé le token du bot` ou `HTTP 401` | Token incorrect, ou régénéré depuis | Refais *Reset Token*, relance `setup_discord.py` et mets à jour le secret |
+| `HTTP 403` avec `Cannot send messages to this user` | Le bot n'est pas sur un serveur où tu es, ou tes messages privés sont fermés | Refais les points 3 et 5 du [§3](#3-créer-le-bot-discord-10-min) |
+| `HTTP 400` ou `HTTP 404` sur `/users/@me/channels` | Identifiant Discord incorrect | Refais le point 4 du [§3](#3-créer-le-bot-discord-10-min) : une suite de chiffres, pas ton pseudo |
+| `Connexion à Discord impossible` | Coupure réseau, VPN ou pare-feu | Vérifie ta connexion, puis relance le script |
+| `.venv\Scripts\python` n'est pas reconnu | `.venv` n'existe pas, ou tu n'es pas dans le bon dossier | Lance `lancer.bat` une fois, et place-toi dans le dossier qui le contient |
+| `No module named 'watcher'` ou `'common'` | Tu n'es pas dans le dossier du projet | Place-toi dans le dossier qui contient `lancer.bat` |
+| `No module named 'websocket'` | Tu utilises un autre Python que celui du projet | Lance `lancer.bat` une fois, et garde `.venv\Scripts\python` au début de la commande |
+| `error: remote origin already exists` | Le dépôt est déjà relié à GitHub | Rien à refaire : utilise seulement `git add`, `git commit` et `git push` |
+| Coche verte mais aucun message Discord | Aucune réponse nouvelle à signaler, ou `Tracked recipients: 0`, ou réponse de plus de 72 h (marquée sans message) | [Pourquoi `Tracked recipients: 0` ?](#pourquoi-tracked-recipients-0) |
 
 ## Limites
 
