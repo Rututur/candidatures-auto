@@ -118,7 +118,7 @@ Les candidatures déjà envoyées avant l'outil (statut `Envoyée`/`Relancée`) 
      | `DISCORD_USER_ID` | ton identifiant Discord, une suite de chiffres (pas ton pseudo) |
 
      Si tu refais « Reset Token » sur Discord, l'ancien token ne marche plus : mets aussi le secret à jour.
-   - onglet **Variables** (facultatif) : `REMINDER_DAYS` = `7` (mets la même valeur que dans l'application).
+   - onglet **Variables** (facultatif) : *New repository variable*, avec `REMINDER_DAYS` dans **Name** et seulement `7` dans **Value** (mets la même valeur que dans l'application).
 3. Onglet **Actions** → « Surveillance des réponses » → **Run workflow** pour un premier essai. Ensuite, ça tourne seul.
 4. Rafraîchis la page, clique sur l'exécution, puis sur **watch**, puis sur l'étape **Check Gmail and notify on Discord** pour lire le résultat :
 
