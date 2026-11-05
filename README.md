@@ -3,7 +3,7 @@
 Deux outils pour une recherche de stage (ou d'alternance, d'emploi…) :
 
 1. **Une application Windows** qui envoie tes candidatures par lot depuis Gmail (CV + lettre PDF), prépare les relances et tient ton tableau Excel à jour.
-2. **Une surveillance en ligne** (GitHub Actions, toutes les 10 min, même PC éteint) qui t'envoie un **message privé Discord** quand une entreprise répond, et un rappel quand il faut relancer.
+2. **Une surveillance en ligne** (GitHub Actions, même PC éteint) qui t'envoie un **message privé Discord** quand une entreprise répond, et un rappel quand il faut relancer.
 
 Les deux partagent leur état via des **libellés Gmail** (`Candidatures/…`). La surveillance n'a donc jamais besoin de ton fichier Excel, et le dépôt GitHub ne contient aucune donnée personnelle.
 
@@ -153,9 +153,50 @@ Les mails du **mode test ne sont pas suivis** : ils partent vers ta propre adres
 
 Bon à savoir :
 - **Les secrets restent secrets**, même dans un dépôt public. Par contre, **les journaux des exécutions sont publics**. Le script n'y écrit que des nombres, jamais d'adresse, de nom ou d'objet.
-- **« Toutes les 10 minutes » est un maximum, pas une garantie.** GitHub peut retarder ou sauter des exécutions planifiées, parfois pendant plusieurs heures, surtout sur un dépôt récent. Pour tester, utilise toujours **Run workflow** sans attendre.
+- **« Toutes les 10 minutes » est un maximum, pas une garantie.** GitHub peut retarder ou abandonner des exécutions planifiées, parfois pendant plusieurs heures. Pour un vrai passage toutes les 10 minutes, suis [la section ci-dessous](#vérifier-vraiment-toutes-les-10-minutes-recommandé). Pour tester, utilise **Run workflow**.
 - Au premier passage, les réponses de plus de 72 h sont marquées comme vues **sans** t'envoyer de message, pour ne pas te noyer sous l'historique.
 - GitHub met en pause les tâches planifiées après 60 jours d'inactivité d'un dépôt. Le workflow se réactive lui-même à chaque passage pour l'éviter.
+
+### Vérifier vraiment toutes les 10 minutes (recommandé)
+
+L'horaire de GitHub n'est pas fiable. Un service gratuit, cron-job.org, peut demander à GitHub de lancer le bot toutes les 10 minutes, comme si tu cliquais sur *Run workflow*. Il ne lit ni tes mails ni tes secrets. L'horaire de GitHub reste en place comme secours.
+
+**1. Crée un token GitHub limité à ce dépôt** sur <https://github.com/settings/personal-access-tokens/new> :
+- **Token name** : `cron-candidatures` ;
+- **Expiration** : une date après la fin de ta recherche ;
+- **Repository access** : *Only select repositories*, puis ton dépôt `candidatures-auto` ;
+- **Permissions** : *Actions* sur **Read and write**, et rien d'autre ;
+- clique sur **Generate token** et copie-le. Il ne s'affiche qu'une fois, et ne le mets jamais dans un fichier du projet.
+
+**2. Crée la tâche sur <https://cron-job.org>** (compte gratuit), avec **Create cronjob** :
+- **URL** (remplace `<ton-pseudo>`) :
+  ```
+  https://api.github.com/repos/<ton-pseudo>/candidatures-auto/actions/workflows/watch.yml/dispatches
+  ```
+- **Execution schedule** : toutes les 10 minutes ;
+- dans les réglages avancés, **Request method** : `POST` ;
+- **Headers** (remplace `<token>`) :
+  ```
+  Authorization: Bearer <token>
+  Accept: application/vnd.github+json
+  X-GitHub-Api-Version: 2022-11-28
+  Content-Type: application/json
+  ```
+- **Request body** :
+  ```json
+  {"ref":"main"}
+  ```
+
+**3. Vérifie** : lance un test depuis cron-job.org, qui doit répondre `204`. Une nouvelle ligne doit apparaître dans l'onglet **Actions** de GitHub. Si elle y apparaît, c'est bon.
+
+| Réponse de cron-job.org | Cause | Solution |
+|---|---|---|
+| `401` | Token incorrect ou expiré | Recrée le token et remplace-le dans le header |
+| `403` | Permission *Actions* absente ou en lecture seule | Mets-la sur *Read and write* |
+| `404` | URL incorrecte, ou le token n'a pas accès à ce dépôt | Vérifie l'URL et *Repository access* |
+| `422` | Le corps de la requête est incorrect | Vérifie `{"ref":"main"}` et le header `Content-Type` |
+
+Pour tout arrêter, désactive la tâche sur cron-job.org et supprime le token sur GitHub.
 
 ## Comment une réponse est reconnue
 
