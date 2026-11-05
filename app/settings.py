@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from . import templates
@@ -45,6 +45,8 @@ class Settings:
     body_template: str = templates.DEFAULT_BODY
     followup_subject_template: str = templates.DEFAULT_FOLLOWUP_SUBJECT
     followup_body_template: str = templates.DEFAULT_FOLLOWUP_BODY
+    theme_mode: str = "light"
+    table_columns: list[str] = field(default_factory=list)  # titles shown; empty = the default choice
 
     @classmethod
     def load(cls) -> "Settings":

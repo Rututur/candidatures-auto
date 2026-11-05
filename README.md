@@ -60,14 +60,16 @@ Il faut **Python 3.10 ou plus** (<https://www.python.org/downloads/>, coche « A
 ### Utilisation
 
 - **Mode test (activé par défaut)** : tous les mails partent vers ta propre adresse avec `[TEST]` dans l'objet, et le tableur n'est pas modifié. Fais un essai, regarde le rendu dans ta boîte, puis décoche le mode test (en haut à droite).
-- **Onglet Envoyer** : coche les entreprises (case à gauche). Pour chacune, clique dessus, choisis sa **lettre PDF** avec « Choisir… » et retouche le mail si tu veux. Le bouton du bas envoie tout le lot, avec une pause entre deux mails (réglable). Un récapitulatif te demande confirmation avant le départ.
-- **Onglet À relancer** : les candidatures sans réponse depuis 7 jours (réglable). La relance est pré-remplie, elle part **dans le même fil** que le mail d'origine, et tu la modifies et la valides avant envoi.
-- **Synchroniser avec Gmail** (automatique à l'ouverture et après chaque envoi réel) : retrouve les réponses et les range dans l'onglet **À valider**. Cette étape ne change aucun statut du tableur.
-- **Onglet À valider** : pour chaque mail reçu, lis le texte (ou clique sur *Ouvrir dans Gmail*), puis clique sur **Approuver** ou choisis une autre réponse : *Refus*, *Réponse à traiter*, *Entretien prévu*, *Acceptée*, *Mail non distribué* ou *Ignorer*. C'est seulement à ce moment que le tableur est modifié. Une entreprise dont la réponse attend ta validation n'apparaît pas dans « À relancer ».
-- **Onglet Tableur** : affiche ton tableur dès l'ouverture de l'application. Double-clique sur une case pour la modifier : ton fichier Excel est mis à jour aussitôt (ferme-le d'abord dans Excel). « Date de relance » et « Action » sont calculées et ne se modifient pas. Pour ajouter une ligne, utilise Excel.
-- **Modifier dans Excel** : ouvre ton tableur dans Excel. Enregistre et ferme Excel, puis clique sur **Recharger**. Si tu oublies, l'application recharge le fichier et te demande de refaire ta modification, pour éviter d'écrire sur la mauvaise ligne.
-- **Changer de fichier…** : seulement si tu veux utiliser un autre tableur. L'application rouvre toute seule le dernier utilisé.
-- **Enregistrer une copie…** : enregistre une copie du tableur où tu veux. Le fichier reste sur ton PC : il n'est jamais envoyé sur GitHub ni ailleurs.
+- **Page Envoyer** : coche les entreprises (case à gauche). Pour chacune, clique dessus, choisis sa **lettre PDF** avec « Choisir… » et retouche le mail si tu veux. Le bouton du bas envoie tout le lot, avec une pause entre deux mails (réglable). Un récapitulatif te demande confirmation avant le départ.
+- **Page À relancer** : les candidatures sans réponse depuis 7 jours (réglable). La relance est pré-remplie, elle part **dans le même fil** que le mail d'origine, et tu la modifies et la valides avant envoi.
+- **Menu de gauche** : passe d'une page à l'autre. Le nombre entre parenthèses indique ce qui t'attend. **Mode sombre / Mode clair** change l'apparence, et ton choix est mémorisé.
+- **Synchroniser Gmail** (automatique à l'ouverture et après chaque envoi réel) : retrouve les réponses et les range dans l'onglet **À valider**. Cette étape ne change aucun statut du tableur.
+- **Page À valider** : pour chaque mail reçu, lis le texte (ou clique sur *Ouvrir dans Gmail*), puis clique sur **Approuver** ou choisis une autre réponse : *Refus*, *Réponse à traiter*, *Entretien prévu*, *Acceptée*, *Mail non distribué* ou *Ignorer*. C'est seulement à ce moment que le tableur est modifié. Une entreprise dont la réponse attend ta validation n'apparaît pas dans « À relancer ».
+- **Page Tableur** : affiche ton tableur dès l'ouverture de l'application, avec une couleur par statut. Double-clique sur une case pour la modifier : ton fichier Excel est mis à jour aussitôt (ferme-le d'abord dans Excel). « Date de relance » et « Action » sont calculées et ne se modifient pas. Pour ajouter une ligne, utilise Excel.
+- **Rechercher, filtre par statut et Colonnes…** : trouve une entreprise et choisis les colonnes visibles. Ça ne change que l'affichage : ton fichier garde toutes ses colonnes.
+- **Fichier → Modifier dans Excel** : ouvre ton tableur dans Excel. Enregistre et ferme Excel, puis choisis **Fichier → Recharger**. Si tu oublies, l'application recharge le fichier et te demande de refaire ta modification, pour éviter d'écrire sur la mauvaise ligne.
+- **Fichier → Changer de fichier…** : seulement si tu veux utiliser un autre tableur. L'application rouvre toute seule le dernier utilisé.
+- **Fichier → Enregistrer une copie…** : enregistre une copie du tableur où tu veux. Le fichier reste sur ton PC : il n'est jamais envoyé sur GitHub ni ailleurs.
 
 ### Ce que l'outil change dans ton tableur
 
@@ -205,7 +207,7 @@ Un mail reçu est considéré comme une réponse s'il arrive **après** ta candi
 - soit qu'il vient de **la même adresse**,
 - soit qu'il vient du **même domaine** (`rh@sodebo.fr` répond pour `contact@sodebo.fr`). Ce dernier cas ne s'applique pas aux adresses gmail.com, orange.fr, etc.
 
-L'estimation refus / positif repose sur des mots-clés (« malheureusement », « pas donner suite », « entretien », « disponibilités »…) cherchés **uniquement dans le nouveau texte**, sans l'historique cité. **C'est seulement une proposition : c'est toi qui décides dans l'onglet À valider.** Discord affiche la même estimation, mais la validation se fait uniquement dans l'application.
+L'estimation refus / positif repose sur des mots-clés (« malheureusement », « pas donner suite », « entretien », « disponibilités »…) cherchés **uniquement dans le nouveau texte**, sans l'historique cité. **C'est seulement une proposition : c'est toi qui décides dans la page À valider.** Discord affiche la même estimation, mais la validation se fait uniquement dans l'application.
 
 ## Libellés Gmail créés
 

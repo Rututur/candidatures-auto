@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from common.classify import KIND_LABELS, strip_quoted
 from common.gmail import GmailClient, gmail_thread_url
 
-from . import templates
+from . import templates, theme
 from .mailer import GmailSender, OutgoingMail, test_connection
 from .settings import Settings, get_password, set_password
 from .sync import PendingReply, SentLabeler, record_decision, synchronize
@@ -55,6 +55,10 @@ DECISION_LABELS = {
     DECISION_BOUNCE: "Mail non distribué",
     DECISION_IGNORE: "Ignorer (automatique ou sans rapport)",
 }
+ALL_STATUSES = "Tous les statuts"
+# Columns of the Tableur page until the user chooses others.
+ESSENTIAL_FIELDS = {"company", "email", "status", "contact_date", "followup_date", "reply_date", "action", "notes"}
+MAX_COLUMN_WIDTH = 240
 
 
 @dataclass
@@ -79,7 +83,7 @@ class MailTab(ttk.Frame):
     """List of companies on the left, editable e-mail on the right."""
 
     def __init__(self, master, app: "App", mode: str):
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=(6, 8))
         self.app = app
         self.mode = mode
         self.drafts: dict[int, Draft] = {}
@@ -102,7 +106,7 @@ class MailTab(ttk.Frame):
                        ("status", "Statut", 85), ("letter", "Lettre", 100)]
         else:
             ttk.Label(left, text="Candidatures sans réponse dont le délai de relance est passé.",
-                      foreground="#555").pack(anchor="w", pady=(0, 6))
+                      style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
             columns = [("check", "", 30), ("company", "Entreprise", 170), ("email", "Email", 180),
                        ("last", "Dernier envoi", 90), ("days", "Jours", 45)]
 
@@ -110,9 +114,9 @@ class MailTab(ttk.Frame):
         list_frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(list_frame, columns=[c[0] for c in columns], show="headings", selectmode="browse")
         for key, title, width in columns:
-            self.tree.heading(key, text=title)
-            self.tree.column(key, width=width, minwidth=30, stretch=key not in ("check", "days"),
-                             anchor="center" if key in ("check", "days", "last") else "w")
+            anchor = "center" if key in ("check", "days", "last") else "w"
+            self.tree.heading(key, text=title, anchor=anchor)
+            self.tree.column(key, width=width, minwidth=30, stretch=key not in ("check", "days"), anchor=anchor)
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -120,7 +124,6 @@ class MailTab(ttk.Frame):
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Button-1>", self._on_click, add=True)
         self.tree.bind("<space>", lambda e: self._toggle(self.current))
-        self.tree.tag_configure("checked", background="#E8F3EC")
 
         buttons = ttk.Frame(left)
         buttons.pack(fill="x", pady=(6, 0))
@@ -160,7 +163,7 @@ class MailTab(ttk.Frame):
         if mode == MODE_FOLLOWUP:
             ttk.Checkbutton(right, text="Joindre à nouveau le CV et la lettre", variable=self.attach_var).grid(
                 row=5, column=1, sticky="w", pady=2)
-        self.cv_label = ttk.Label(right, text="", foreground="#555")
+        self.cv_label = ttk.Label(right, text="", style="Muted.TLabel")
         self.cv_label.grid(row=6, column=0, columnspan=2, sticky="w", pady=(2, 0))
         ttk.Button(right, text="Rétablir le modèle", command=self._reset_draft).grid(row=6, column=2, sticky="e")
 
@@ -170,8 +173,13 @@ class MailTab(ttk.Frame):
 
         # -- bottom: action ----------------------------------------------------
         self.action = ttk.Button(self, style="Accent.TButton", command=lambda: self.app.start_batch(self.mode))
-        self.action.pack(fill="x", pady=(8, 0), ipady=4)
+        self.action.pack(fill="x", pady=(10, 0))
         self.update_counts()
+        self.apply_palette()
+
+    def apply_palette(self) -> None:
+        self.tree.tag_configure("checked", background=self.app.palette.accent_soft)
+        self._set_editor_state(str(self.body.cget("state")))
 
     # -- list --------------------------------------------------------------
     def wanted_rows(self, workbook: ApplicationWorkbook) -> list[Row]:
@@ -264,8 +272,9 @@ class MailTab(ttk.Frame):
         self._load_editor(self._draft(row_id))
 
     def _set_editor_state(self, state: str) -> None:
+        palette = self.app.palette
         self.body.configure(state="normal" if state == "normal" else "disabled",
-                            background="white" if state == "normal" else "#F2F2F2")
+                            background=palette.surface if state == "normal" else palette.background)
 
     def _load_editor(self, draft: Draft) -> None:
         row = self.rows[self.current]
@@ -337,11 +346,38 @@ class TableTab(ttk.Frame):
     """The whole spreadsheet inside the application; each edit is written to the file."""
 
     def __init__(self, master, app: "App"):
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=(6, 8))
         self.app = app
-        ttk.Label(self, foreground="#555",
+        self.displayed: list[Column] = []
+
+        tools = ttk.Frame(self)
+        tools.pack(fill="x", pady=(0, 8))
+        ttk.Label(tools, text="Rechercher :").pack(side="left", padx=(0, 6))
+        self.search_var = tk.StringVar()
+        ttk.Entry(tools, textvariable=self.search_var, width=28).pack(side="left", padx=(0, 8))
+        self.status_var = tk.StringVar(value=ALL_STATUSES)
+        self.status_combo = ttk.Combobox(tools, textvariable=self.status_var, state="readonly", width=18,
+                                         values=[ALL_STATUSES])
+        self.status_combo.pack(side="left", padx=(0, 8))
+        ttk.Button(tools, text="Colonnes…", command=lambda: ColumnChooser(self.app)).pack(side="left")
+        self.file_button = ttk.Menubutton(tools, text="Fichier")
+        self.file_button.pack(side="right")
+        menu = tk.Menu(self.file_button, tearoff=False)
+        menu.add_command(label="Recharger", command=app.reload_workbook)
+        menu.add_command(label="Modifier dans Excel", command=app.open_in_excel)
+        menu.add_command(label="Enregistrer une copie…", command=app.save_workbook_copy)
+        menu.add_separator()
+        menu.add_command(label="Changer de fichier…", command=app.choose_workbook)
+        self.file_button["menu"] = menu
+        self.count_label = ttk.Label(tools, style="Muted.TLabel")
+        self.count_label.pack(side="right", padx=10)
+
+        ttk.Label(self, style="Muted.TLabel",
                   text="Double-clique sur une case pour la modifier : ton fichier Excel est mis à jour aussitôt.").pack(
             anchor="w", pady=(0, 6))
+        self.search_var.trace_add("write", lambda *_: self.app.refresh_table())
+        self.status_combo.bind("<<ComboboxSelected>>", lambda _e: self.app.refresh_table())
+
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(frame, show="headings", selectmode="browse")
@@ -354,19 +390,48 @@ class TableTab(ttk.Frame):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         self.tree.bind("<Double-1>", self._on_double_click)
+        self.apply_palette()
+
+    def apply_palette(self) -> None:
+        for group, color in self.app.palette.status.items():
+            self.tree.tag_configure(group, background=color)
+
+    def _displayed_columns(self, columns: list[Column]) -> list[Column]:
+        chosen = self.app.settings.table_columns
+        return [
+            c for c in columns
+            if c.field == "company" or (c.title in chosen if chosen else c.field in ESSENTIAL_FIELDS)
+        ]
+
+    def _refresh_status_choices(self, workbook: ApplicationWorkbook) -> None:
+        listed = next((c.choices for c in workbook.table_columns if c.field == "status"), [])
+        extra = sorted({r.status for r in workbook.rows if r.status} - set(listed))
+        choices = [ALL_STATUSES, *listed, *extra]
+        self.status_combo.configure(values=choices)
+        if self.status_var.get() not in choices:
+            self.status_var.set(ALL_STATUSES)
 
     def refresh(self, workbook: ApplicationWorkbook) -> None:
         x, y = self.tree.xview()[0], self.tree.yview()[0]
         selection = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         columns = workbook.table_columns
-        self.tree.configure(columns=[str(c.index) for c in columns])
+        self.displayed = self._displayed_columns(columns)
+        self.tree.configure(columns=[str(c.index) for c in columns],
+                            displaycolumns=[str(c.index) for c in self.displayed])
         for column in columns:
-            self.tree.heading(str(column.index), text=column.title)
-            self.tree.column(str(column.index), width=int(column.width * 7), minwidth=40, stretch=False, anchor="w")
-        for row in workbook.rows:
+            self.tree.heading(str(column.index), text=column.title, anchor="w")
+            # Wide enough for the title, which is what tells the columns apart.
+            width = max(min(int(column.width * 6), MAX_COLUMN_WIDTH), len(column.title) * 7 + 18)
+            self.tree.column(str(column.index), width=width, minwidth=40, stretch=column.field == "notes", anchor="w")
+        self._refresh_status_choices(workbook)
+        status = self.status_var.get()
+        rows = workbook.filter_rows(self.search_var.get(), "" if status == ALL_STATUSES else status)
+        for row in rows:
             values = [" | ".join(workbook.display_value(row.row, c).splitlines()) for c in columns]
-            self.tree.insert("", "end", iid=str(row.row), values=values)
+            group = theme.STATUS_GROUPS.get(row.status)
+            self.tree.insert("", "end", iid=str(row.row), values=values, tags=(group,) if group else ())
+        self.count_label.configure(text=f"{len(rows)} sur {len(workbook.rows)} entreprises")
         if selection and self.tree.exists(selection[0]):
             self.tree.selection_set(selection[0])
         self.update_idletasks()
@@ -389,11 +454,48 @@ class TableTab(ttk.Frame):
 
     def _column_at(self, row: str, x: int) -> Column | None:
         # Not identify_column(): it gives the first pixels of a cell to the previous column.
-        for position, column in enumerate(self.app.workbook.table_columns, start=1):
+        for position, column in enumerate(self.displayed, start=1):
             box = self.tree.bbox(row, f"#{position}")
             if box and box[0] <= x < box[0] + box[2]:
                 return column
         return None
+
+
+class ColumnChooser(tk.Toplevel):
+    """Choose the columns of the Tableur page. The file itself keeps all of them."""
+
+    def __init__(self, app: "App"):
+        super().__init__(app)
+        self.app = app
+        self.title("Colonnes affichées")
+        self.transient(app)
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Colonnes à afficher dans l'application.\nTon fichier Excel garde toutes les colonnes.",
+                  style="Muted.TLabel", justify="left").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        self.vars: dict[str, tk.BooleanVar] = {}
+        if app.workbook:
+            shown = {c.title for c in app.table_tab.displayed}
+            for position, column in enumerate(app.workbook.table_columns):
+                self.vars[column.title] = tk.BooleanVar(value=column.title in shown)
+                box = ttk.Checkbutton(frame, text=column.title, variable=self.vars[column.title])
+                if column.field == "company":  # without it, a row could not be identified
+                    box.state(["disabled"])
+                box.grid(row=1 + position // 2, column=position % 2, sticky="w", padx=(0, 18), pady=2)
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=99, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        ttk.Button(buttons, text="Enregistrer", style="Accent.TButton", command=self.save).pack(side="right")
+        ttk.Button(buttons, text="Annuler", command=self.destroy).pack(side="right", padx=6)
+        self.bind("<Escape>", lambda e: self.destroy())
+        theme.restyle(self, app.palette)
+        self.grab_set()
+
+    def save(self) -> None:
+        settings = self.app.settings
+        settings.table_columns = [title for title, var in self.vars.items() if var.get()]
+        settings.save()
+        self.destroy()
+        self.app.refresh_table()
 
 
 class CellEditor(tk.Toplevel):
@@ -439,6 +541,7 @@ class CellEditor(tk.Toplevel):
         self.save_button = ttk.Button(buttons, text="Enregistrer", style="Accent.TButton", command=self.save)
         self.save_button.pack(side="right")
         ttk.Button(buttons, text="Annuler", command=self.destroy).pack(side="right", padx=6)
+        theme.restyle(self, app.palette)
         self.grab_set()
         field.focus_set()
 
@@ -471,14 +574,15 @@ class ReviewTab(ttk.Frame):
         left = ttk.Frame(paned)
         paned.add(left, weight=1)
         ttk.Label(left, text="Le tableur ne change que lorsque tu valides une réponse.",
-                  foreground="#555").pack(anchor="w", pady=(0, 6))
+                  style="Muted.TLabel").pack(anchor="w", pady=(0, 6))
         list_frame = ttk.Frame(left)
         list_frame.pack(fill="both", expand=True)
         columns = [("company", "Entreprise", 170), ("received", "Reçu le", 80), ("estimate", "Estimation", 210)]
         self.tree = ttk.Treeview(list_frame, columns=[c[0] for c in columns], show="headings", selectmode="browse")
         for key, title, width in columns:
-            self.tree.heading(key, text=title)
-            self.tree.column(key, width=width, minwidth=30, anchor="center" if key == "received" else "w")
+            anchor = "center" if key == "received" else "w"
+            self.tree.heading(key, text=title, anchor=anchor)
+            self.tree.column(key, width=width, minwidth=30, anchor=anchor)
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -490,7 +594,7 @@ class ReviewTab(ttk.Frame):
         paned.add(right, weight=1)
         self.title_label = ttk.Label(right, style="Title.TLabel")
         self.title_label.pack(anchor="w")
-        self.info_label = ttk.Label(right, foreground="#555", justify="left", wraplength=520)
+        self.info_label = ttk.Label(right, style="Muted.TLabel", justify="left", wraplength=520)
         self.info_label.pack(anchor="w", pady=(2, 6))
 
         text_frame = ttk.Frame(right)
@@ -596,7 +700,7 @@ class SettingsDialog(tk.Toplevel):
             if browse:
                 ttk.Button(parent, text="Choisir…", command=browse).grid(row=row, column=2, padx=(4, 0))
             if hint:
-                ttk.Label(parent, text=hint, foreground="#666", wraplength=380, justify="left").grid(
+                ttk.Label(parent, text=hint, style="Muted.TLabel", wraplength=380, justify="left").grid(
                     row=row + 1, column=1, sticky="w", pady=(0, 4))
 
         account = ttk.Frame(notebook, padding=10)
@@ -628,7 +732,7 @@ class SettingsDialog(tk.Toplevel):
 
         tpl = ttk.Frame(notebook, padding=10)
         notebook.add(tpl, text="Modèles de mail")
-        ttk.Label(tpl, text="Variables : " + templates.PLACEHOLDER_HELP, foreground="#555", justify="left").grid(
+        ttk.Label(tpl, text="Variables : " + templates.PLACEHOLDER_HELP, style="Muted.TLabel", justify="left").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
         self.texts: dict[str, tk.Text] = {}
         rows = [("subject_template", "Objet (candidature)", 1), ("body_template", "Message (candidature)", 9),
@@ -648,6 +752,7 @@ class SettingsDialog(tk.Toplevel):
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="Enregistrer", style="Accent.TButton", command=self._save).pack(side="right")
         ttk.Button(buttons, text="Annuler", command=self.destroy).pack(side="right", padx=6)
+        theme.restyle(self, app.palette)
         self.grab_set()
 
     def _browse_cv(self) -> None:
@@ -669,14 +774,15 @@ class SettingsDialog(tk.Toplevel):
     def _test(self) -> None:
         address = self.vars["gmail_address"].get().strip()
         password = self.vars["password"].get().strip()
-        self.test_label.configure(text="Connexion en cours…", foreground="#555")
+        palette = self.app.palette
+        self.test_label.configure(text="Connexion en cours…", foreground=palette.muted)
 
         def work():
             try:
                 test_connection(address, password)
-                result = ("Connexion réussie (envoi et lecture).", "#1E7B34")
+                result = ("Connexion réussie (envoi et lecture).", palette.success)
             except Exception as exc:
-                result = (f"Échec : {exc}", "#B42318")
+                result = (f"Échec : {exc}", palette.danger)
             self.after(0, lambda: self.test_label.configure(text=result[0], foreground=result[1]))
 
         threading.Thread(target=work, daemon=True).start()
@@ -716,8 +822,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Candidatures — envoi, relances et suivi")
-        self.geometry("1200x740")
-        self.minsize(980, 600)
+        self.geometry("1280x780")
+        self.minsize(1040, 620)
         self.settings = Settings.load()
         self.password = get_password(self.settings.gmail_address)
         self.workbook: ApplicationWorkbook | None = None
@@ -741,63 +847,106 @@ class App(tk.Tk):
 
     # -- layout ------------------------------------------------------------
     def _setup_style(self) -> None:
-        style = ttk.Style(self)
-        if sys.platform != "win32" and "clam" in style.theme_names():
-            style.theme_use("clam")
-        base = "Segoe UI" if sys.platform == "win32" else "TkDefaultFont"
-        self.text_font = ("Segoe UI", 10) if sys.platform == "win32" else ("DejaVu Sans", 10)
-        style.configure("Title.TLabel", font=(base, 12, "bold"))
-        style.configure("Accent.TButton", font=(base, 10, "bold"))
-        style.configure("Test.TCheckbutton", foreground="#B54708", font=(base, 10, "bold"))
-        style.configure("Real.TCheckbutton", foreground="#1E7B34", font=(base, 10, "bold"))
+        self.text_font = (theme.FONT_FAMILY, theme.FONT_SIZE)
+        self.palette = theme.apply(self, self.settings.theme_mode)
 
     def _build(self) -> None:
-        top = ttk.Frame(self, padding=(10, 8))
-        top.pack(fill="x")
-        ttk.Label(top, text="Tableur :").pack(side="left")
-        self.path_var = tk.StringVar(value="aucun")
-        ttk.Label(top, textvariable=self.path_var, foreground="#333").pack(side="left", padx=(4, 8))
-        ttk.Button(top, text="Changer de fichier…", command=self.choose_workbook).pack(side="left")
-        ttk.Button(top, text="Recharger", command=self.reload_workbook).pack(side="left", padx=4)
-        ttk.Button(top, text="Modifier dans Excel", command=self.open_in_excel).pack(side="left")
-        ttk.Button(top, text="Enregistrer une copie…", command=self.save_workbook_copy).pack(side="left", padx=4)
-        self.sync_button = ttk.Button(top, text="Synchroniser avec Gmail", command=lambda: self.run_sync(False))
-        self.sync_button.pack(side="left", padx=4)
-        ttk.Button(top, text="Réglages", command=lambda: SettingsDialog(self)).pack(side="right")
-        self.test_var = tk.BooleanVar(value=self.settings.test_mode)
-        self.test_check = ttk.Checkbutton(top, variable=self.test_var, command=self._toggle_test)
-        self.test_check.pack(side="right", padx=12)
+        self.path_var = tk.StringVar(value="")
+        self.status_var = tk.StringVar(value="Prêt.")
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+        sidebar = ttk.Frame(self, style="Sidebar.TFrame", padding=(12, 18))
+        sidebar.grid(row=0, column=0, sticky="ns")
+        main = ttk.Frame(self)
+        main.grid(row=0, column=1, sticky="nsew")
 
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=10)
+        # -- main area -----------------------------------------------------
+        header = ttk.Frame(main, padding=(20, 16, 20, 6))
+        header.pack(fill="x")
+        self.page_title = ttk.Label(header, style="Page.TLabel")
+        self.page_title.pack(side="left")
+        ttk.Label(header, textvariable=self.path_var, style="Muted.TLabel").pack(side="left", padx=12, pady=(8, 0))
+        self.test_var = tk.BooleanVar(value=self.settings.test_mode)
+        self.test_check = ttk.Checkbutton(header, variable=self.test_var, command=self._toggle_test)
+        self.test_check.pack(side="right")
+
+        self.notebook = ttk.Notebook(main, style="Pages.TNotebook")
+        self.notebook.pack(fill="both", expand=True, padx=14)
         self.table_tab = TableTab(self.notebook, self)
         self.send_tab = MailTab(self.notebook, self, MODE_SEND)
         self.followup_tab = MailTab(self.notebook, self, MODE_FOLLOWUP)
         self.review_tab = ReviewTab(self.notebook, self)
-        log_frame = ttk.Frame(self.notebook, padding=8)
-        self.log_text = tk.Text(log_frame, wrap="word", state="disabled", font=self.text_font,
-                                relief="solid", borderwidth=1, padx=8, pady=6)
+        log_frame = ttk.Frame(self.notebook, padding=(6, 8))
+        self.log_text = tk.Text(log_frame, wrap="word", state="disabled", font=self.text_font, padx=8, pady=6)
         self.log_text.pack(fill="both", expand=True)
-        self.notebook.add(self.table_tab, text="  Tableur  ")
-        self.notebook.add(self.send_tab, text="  Envoyer  ")
-        self.notebook.add(self.followup_tab, text="  À relancer  ")
-        self.notebook.add(self.review_tab, text="  À valider  ")
-        self.notebook.add(log_frame, text="  Journal  ")
 
-        bottom = ttk.Frame(self, padding=(10, 6))
+        bottom = ttk.Frame(main, padding=(20, 8))
         bottom.pack(fill="x")
-        self.status_var = tk.StringVar(value="Prêt.")
-        ttk.Label(bottom, textvariable=self.status_var).pack(side="left")
+        ttk.Label(bottom, textvariable=self.status_var, style="Muted.TLabel").pack(side="left")
         self.cancel_button = ttk.Button(bottom, text="Arrêter après ce mail", command=self.cancel_event.set)
         self.progress = ttk.Progressbar(bottom, length=240, mode="determinate")
+
+        # -- side menu ------------------------------------------------------
+        ttk.Label(sidebar, text="Candidatures", style="Brand.TLabel").pack(anchor="w", padx=6)
+        ttk.Label(sidebar, text="Recherche de stage", style="SidebarMuted.TLabel").pack(anchor="w", padx=6, pady=(0, 18))
+        self.pages = [
+            (self.table_tab, "Tableur"),
+            (self.send_tab, "Envoyer"),
+            (self.followup_tab, "À relancer"),
+            (self.review_tab, "À valider"),
+            (log_frame, "Journal"),
+        ]
+        self.nav_buttons: dict[str, ttk.Button] = {}
+        for page, title in self.pages:
+            self.notebook.add(page, text=title)
+            button = ttk.Button(sidebar, text=title, style="Nav.TButton", width=22,
+                                command=lambda p=page: self.notebook.select(p))
+            button.pack(fill="x", pady=1)
+            self.nav_buttons[str(page)] = button
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_page_changed)
+
+        self.theme_button = ttk.Button(sidebar, style="Nav.TButton", command=self.toggle_theme)
+        self.theme_button.pack(side="bottom", fill="x", pady=1)
+        ttk.Button(sidebar, text="Réglages", style="Nav.TButton",
+                   command=lambda: SettingsDialog(self)).pack(side="bottom", fill="x", pady=1)
+        self.sync_button = ttk.Button(sidebar, text="Synchroniser Gmail", style="Accent.TButton",
+                                      command=lambda: self.run_sync(False))
+        self.sync_button.pack(side="bottom", fill="x", pady=(0, 10))
+
+        self._update_theme_button()
         self._update_test_label()
+        self._on_page_changed()
+        theme.restyle(self, self.palette)
+        for tab in (self.send_tab, self.followup_tab):
+            tab.apply_palette()
+
+    def _on_page_changed(self, _event=None) -> None:
+        current = self.notebook.select()
+        for page, button in self.nav_buttons.items():
+            button.configure(style="NavActive.TButton" if page == current else "Nav.TButton")
+        self.page_title.configure(text=next(title for page, title in self.pages if str(page) == current))
+
+    def _set_page_count(self, target, count: int) -> None:
+        title = next(title for page, title in self.pages if page is target)
+        self.nav_buttons[str(target)].configure(text=f"{title} ({count})" if count else title)
+
+    def _update_theme_button(self) -> None:
+        self.theme_button.configure(text="Mode clair" if self.palette.dark else "Mode sombre")
+
+    def toggle_theme(self) -> None:
+        self.settings.theme_mode = theme.LIGHT_MODE if self.palette.dark else theme.DARK_MODE
+        self.settings.save()
+        self.palette = theme.apply(self, self.settings.theme_mode)
+        for tab in (self.table_tab, self.send_tab, self.followup_tab):
+            tab.apply_palette()
+        self._update_theme_button()
 
     def _update_test_label(self) -> None:
         if self.settings.test_mode:
             self.test_check.configure(style="Test.TCheckbutton",
                                       text=f"Mode test : tout part vers {self.settings.effective_test_address or 'ton adresse'}")
         else:
-            self.test_check.configure(style="Real.TCheckbutton", text="Mode test désactivé : envois réels")
+            self.test_check.configure(style="Real.TCheckbutton", text="Envois réels")
         for tab in (self.send_tab, self.followup_tab):
             tab.update_counts()
 
@@ -928,11 +1077,14 @@ class App(tk.Tk):
         self.table_tab.refresh(self.workbook)
         for tab in (self.send_tab, self.followup_tab):
             tab.refresh(tab.wanted_rows(self.workbook))
-        n = len(self.followup_tab.rows)
-        self.notebook.tab(self.followup_tab, text=f"  À relancer ({n})  " if n else "  À relancer  ")
+        self._set_page_count(self.followup_tab, len(self.followup_tab.rows))
         self.review_tab.refresh(self.pending)
-        n = len(self.pending)
-        self.notebook.tab(self.review_tab, text=f"  À valider ({n})  " if n else "  À valider  ")
+        self._set_page_count(self.review_tab, len(self.pending))
+
+    def refresh_table(self) -> None:
+        # During an operation a worker thread may be rewriting the rows.
+        if self.workbook and not self.busy:
+            self.table_tab.refresh(self.workbook)
 
     def on_settings_changed(self) -> None:
         self.test_var.set(self.settings.test_mode)

@@ -280,6 +280,18 @@ class ApplicationWorkbook:
             return value.strftime("%d/%m/%Y")
         return _as_text(value)
 
+    def filter_rows(self, query: str = "", status: str = "") -> list[Row]:
+        """Rows with this status (if any) whose cells contain every word of the query."""
+        words = normalize(query).split()
+        result = []
+        for item in self.rows:
+            if status and item.status != status:
+                continue
+            content = normalize(" ".join(self.display_value(item.row, c) for c in self.table_columns))
+            if all(word in content for word in words):
+                result.append(item)
+        return result
+
     def by_row(self, row: int) -> Row:
         for item in self.rows:
             if item.row == row:

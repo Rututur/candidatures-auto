@@ -167,12 +167,46 @@ class WorkbookLocked(Exception):
     pass
 
 
+class ThemeTest(unittest.TestCase):
+    @staticmethod
+    def contrast(first, second):
+        def luminance(color):
+            channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            r, g, b = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+        high, low = sorted((luminance(first), luminance(second)), reverse=True)
+        return (high + 0.05) / (low + 0.05)
+
+    def test_text_stays_readable_in_both_modes(self):
+        from app.theme import PALETTES
+
+        for mode, p in PALETTES.items():
+            pairs = {
+                "text": (p.text, p.background), "text on surface": (p.text, p.surface),
+                "muted": (p.muted, p.background), "muted on sidebar": (p.muted, p.sidebar),
+                "button": (p.on_accent, p.accent), "active menu": (p.accent_text, p.accent_soft),
+                "test mode": (p.warning, p.background), "real mode": (p.success, p.background),
+                "error": (p.danger, p.surface),
+            }
+            pairs.update({f"status {name}": (p.text, color) for name, color in p.status.items()})
+            for name, (foreground, background) in pairs.items():
+                with self.subTest(mode=mode, pair=name):
+                    self.assertGreaterEqual(self.contrast(foreground, background), 4.5)
+
+    def test_every_status_group_has_a_color(self):
+        from app.theme import PALETTES, STATUS_GROUPS
+
+        for palette in PALETTES.values():
+            self.assertTrue(set(STATUS_GROUPS.values()) <= set(palette.status))
+
+
 class TableTabTest(unittest.TestCase):
     def test_click_on_the_edge_of_a_cell_selects_that_cell_column(self):
         from app import gui
 
         tab = mock.Mock()
-        tab.app.workbook.table_columns = ["first", "second"]
+        tab.displayed = ["first", "second"]
         tab.tree.bbox.side_effect = lambda row, column: {"#1": (0, 25, 100, 20), "#2": (100, 25, 100, 20)}[column]
         self.assertEqual(gui.TableTab._column_at(tab, "5", 99), "first")
         self.assertEqual(gui.TableTab._column_at(tab, "5", 100), "second")

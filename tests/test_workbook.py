@@ -225,6 +225,16 @@ class WorkbookTest(unittest.TestCase):
         self.assertIsNone(openpyxl.load_workbook(self.path)["Suivi"].cell(row, 11).value)
         self.assertEqual(wb.by_row(row).company, "Ceralis")  # reloaded for the user
 
+    def test_filter_rows_by_search_and_status(self):
+        wb = ApplicationWorkbook(self.path)
+        names = lambda rows: [r.company for r in rows]  # noqa: E731
+        self.assertEqual(len(wb.filter_rows()), 4)
+        self.assertEqual(names(wb.filter_rows("cyberscope.fr")), ["Cyberscope"])
+        self.assertEqual(names(wb.filter_rows("PRÉSIDENT up2tech")), ["UP2TECH"])  # accents and case ignored
+        self.assertEqual(names(wb.filter_rows(status="Envoyée")), ["Cyberscope", "Ceralis"])
+        self.assertEqual(names(wb.filter_rows("ceralis", "Envoyée")), ["Ceralis"])
+        self.assertEqual(wb.filter_rows("introuvable"), [])
+
     def test_legacy_applications_get_labelled(self):
         wb = ApplicationWorkbook(self.path)
         from common.gmail import MessageInfo

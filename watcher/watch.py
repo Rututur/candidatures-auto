@@ -84,7 +84,7 @@ def reply_embed(reply: Reply, kind: str, account: str) -> dict:
             {"name": "Reçu le", "value": local(msg.date), "inline": True},
             {"name": "De", "value": sender[:1024], "inline": False},
         ],
-        "footer": {"text": "Estimation automatique : à valider dans l'onglet « À valider » de l'application. Le titre ouvre Gmail."},
+        "footer": {"text": "Estimation automatique : à valider dans la page « À valider » de l'application. Le titre ouvre Gmail."},
     }
 
 
@@ -98,7 +98,7 @@ def reminder_embed(app: SentApplication, days: int, account: str) -> dict:
         "color": COLOR_ORANGE,
         "description": (
             f"{history} le {local(last.date)}, sans réponse depuis {days} jours.\n"
-            "La relance est prête dans l'onglet « À relancer » de l'application : "
+            "La relance est prête dans la page « À relancer » de l'application : "
             "relis-la, modifie-la si besoin, puis envoie-la."
         ),
         "fields": [{"name": "Adresse", "value": app.address, "inline": False}],
