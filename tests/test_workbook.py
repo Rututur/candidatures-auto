@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -20,6 +21,8 @@ from app.workbook import (
     STATUS_REFUSED,
     STATUS_REPLIED,
     ApplicationWorkbook,
+    WorkbookChanged,
+    WorkbookError,
 )
 from common.gmail import LABEL_AUTO_REPLY, LABEL_VALIDATED
 from tests.fake_gmail import FakeGmail
@@ -153,6 +156,74 @@ class WorkbookTest(unittest.TestCase):
         item = wb.by_row(row)
         self.assertEqual((item.status, item.reply_date), ("Envoyée", None))
         self.assertIn("Estimation annulée", item.notes)
+
+    def column(self, wb, title):
+        return next(c for c in wb.table_columns if c.title == title)
+
+    def test_table_shows_every_column_and_computes_known_formulas(self):
+        book = openpyxl.load_workbook(self.path)
+        ws = book["Suivi"]
+        ws.cell(4, 12, "Action")
+        ws.cell(5, 12, '=IF(I5="Envoyée","À relancer","")')
+        ws.cell(6, 12, '=IF(I6="Envoyée","À relancer","")')
+        book.save(self.path)
+
+        wb = ApplicationWorkbook(self.path, reminder_days=7)
+        self.assertEqual([c.title for c in wb.table_columns], HEADERS + ["Action"])
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        show = lambda title: wb.display_value(row, self.column(wb, title))  # noqa: E731
+        self.assertEqual(show("Entreprise"), "Cyberscope")
+        self.assertEqual(show("Date de contact"), "25/10/2026")
+        self.assertEqual(show("Date de relance"), "01/11/2026")  # computed: no cached formula result
+        self.assertEqual(show("Action"), "À relancer")
+        self.assertIn("Envoyée", self.column(wb, "Statut").choices)
+
+    def test_edit_cell_replaces_the_value_in_the_file(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        wb.edit_cell(row, self.column(wb, "Notes"), "Première note")
+        wb.edit_cell(row, self.column(wb, "Notes"), "Note corrigée")
+        wb.edit_cell(row, self.column(wb, "Statut"), "Refusée")
+        wb.edit_cell(row, self.column(wb, "Date de réponse"), "03/11/2026")
+        wb.edit_cell(row, self.column(wb, "N°"), "42")
+
+        ws = openpyxl.load_workbook(self.path)["Suivi"]
+        self.assertEqual(ws.cell(row, 11).value, "Note corrigée")
+        self.assertEqual(ws.cell(row, 9).value, "Refusée")
+        self.assertEqual(ws.cell(row, 10).value.date(), date(2026, 11, 3))
+        self.assertEqual(ws.cell(row, 10).number_format, "dd/mm/yyyy")
+        self.assertEqual(ws.cell(row, 1).value, 42)
+        self.assertEqual(ws.cell(row, 8).value, f'=IF(G{row}="","",G{row}+10)')  # formula untouched
+        self.assertEqual(wb.by_row(row).status, "Refusée")
+
+    def test_edit_cell_can_empty_a_cell(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        wb.edit_cell(row, self.column(wb, "Date de contact"), "")
+        self.assertIsNone(wb.by_row(row).contact_date)
+
+    def test_edit_cell_refuses_invalid_input_without_writing(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        before = self.path.read_bytes()
+        for title, text in (("Date de contact", "demain"), ("Date de relance", "01/01/2027"), ("Entreprise", "  ")):
+            with self.subTest(title=title), self.assertRaises(WorkbookError):
+                wb.edit_cell(row, self.column(wb, title), text)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_edit_cell_refuses_a_file_changed_elsewhere(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        # Sorted in Excel: the row now holds another company.
+        book = openpyxl.load_workbook(self.path)
+        book["Suivi"].cell(row, 2, "Ceralis")
+        book.save(self.path)
+        os.utime(self.path, ns=(0, wb._loaded_mtime + 1_000_000))
+
+        with self.assertRaises(WorkbookChanged):
+            wb.edit_cell(row, self.column(wb, "Notes"), "Mauvaise ligne")
+        self.assertIsNone(openpyxl.load_workbook(self.path)["Suivi"].cell(row, 11).value)
+        self.assertEqual(wb.by_row(row).company, "Ceralis")  # reloaded for the user
 
     def test_legacy_applications_get_labelled(self):
         wb = ApplicationWorkbook(self.path)

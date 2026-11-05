@@ -36,7 +36,9 @@ from .workbook import (
     STATUS_REFUSED,
     STATUS_REPLIED,
     ApplicationWorkbook,
+    Column,
     Row,
+    WorkbookChanged,
     WorkbookError,
 )
 
@@ -329,6 +331,128 @@ class MailTab(ttk.Frame):
     def uncheck(self, row_id: int) -> None:
         if row_id in self.drafts:
             self.drafts[row_id].checked = False
+
+
+class TableTab(ttk.Frame):
+    """The whole spreadsheet inside the application; each edit is written to the file."""
+
+    def __init__(self, master, app: "App"):
+        super().__init__(master, padding=8)
+        self.app = app
+        ttk.Label(self, foreground="#555",
+                  text="Double-clique sur une case pour la modifier : ton fichier Excel est mis à jour aussitôt.").pack(
+            anchor="w", pady=(0, 6))
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(frame, show="headings", selectmode="browse")
+        y_scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.tree.bind("<Double-1>", self._on_double_click)
+
+    def refresh(self, workbook: ApplicationWorkbook) -> None:
+        x, y = self.tree.xview()[0], self.tree.yview()[0]
+        selection = self.tree.selection()
+        self.tree.delete(*self.tree.get_children())
+        columns = workbook.table_columns
+        self.tree.configure(columns=[str(c.index) for c in columns])
+        for column in columns:
+            self.tree.heading(str(column.index), text=column.title)
+            self.tree.column(str(column.index), width=int(column.width * 7), minwidth=40, stretch=False, anchor="w")
+        for row in workbook.rows:
+            values = [" | ".join(workbook.display_value(row.row, c).splitlines()) for c in columns]
+            self.tree.insert("", "end", iid=str(row.row), values=values)
+        if selection and self.tree.exists(selection[0]):
+            self.tree.selection_set(selection[0])
+        self.update_idletasks()
+        self.tree.xview_moveto(x)
+        self.tree.yview_moveto(y)
+
+    def _on_double_click(self, event) -> None:
+        row = self.tree.identify_row(event.y)
+        if not row or self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        column = self._column_at(row, event.x)
+        if column is None:
+            return
+        if self.app.busy:
+            self.app.status_var.set("Patiente quelques secondes : une opération est en cours.")
+        elif column.read_only:
+            self.app.status_var.set(f"« {column.title} » est calculée automatiquement : elle ne se modifie pas.")
+        else:
+            CellEditor(self.app, int(row), column)
+
+    def _column_at(self, row: str, x: int) -> Column | None:
+        # Not identify_column(): it gives the first pixels of a cell to the previous column.
+        for position, column in enumerate(self.app.workbook.table_columns, start=1):
+            box = self.tree.bbox(row, f"#{position}")
+            if box and box[0] <= x < box[0] + box[2]:
+                return column
+        return None
+
+
+class CellEditor(tk.Toplevel):
+    """Small window to change one cell of the spreadsheet."""
+
+    def __init__(self, app: "App", row: int, column: Column):
+        super().__init__(app)
+        self.app = app
+        self.row = row
+        self.column = column
+        self.title(f"{app.workbook.by_row(row).company} — {column.title}")
+        self.transient(app)
+        self.minsize(420, 0)
+        value = app.workbook.display_value(row, column)
+
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill="both", expand=True)
+        hint = " (jj/mm/aaaa)" if column.is_date else ""
+        ttk.Label(frame, text=f"{column.title}{hint} :").pack(anchor="w", pady=(0, 4))
+        self.text: tk.Text | None = None
+        self.var = tk.StringVar(value=value)
+        if column.choices:
+            choices = ["", *column.choices]
+            if value not in choices:
+                choices.append(value)
+            field = ttk.Combobox(frame, textvariable=self.var, values=choices, state="readonly")
+            field.pack(fill="x")
+        elif column.field == "notes" or "\n" in value:
+            field = self.text = tk.Text(frame, wrap="word", height=10, width=60, font=app.text_font,
+                                        relief="solid", borderwidth=1, padx=6, pady=4)
+            field.insert("1.0", value)
+            field.pack(fill="both", expand=True)
+        else:
+            field = ttk.Entry(frame, textvariable=self.var)
+            field.pack(fill="x")
+            field.select_range(0, "end")
+        if self.text is None:
+            self.bind("<Return>", lambda e: self.save())
+        self.bind("<Escape>", lambda e: self.destroy())
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=(10, 0))
+        self.save_button = ttk.Button(buttons, text="Enregistrer", style="Accent.TButton", command=self.save)
+        self.save_button.pack(side="right")
+        ttk.Button(buttons, text="Annuler", command=self.destroy).pack(side="right", padx=6)
+        self.grab_set()
+        field.focus_set()
+
+    def save(self) -> None:
+        text = self.text.get("1.0", "end-1c") if self.text else self.var.get()
+        try:
+            self.app.save_cell(self.row, self.column, text)
+        except WorkbookChanged as exc:  # the row may have moved: the user has to check it again
+            self.destroy()
+            messagebox.showwarning("Tableur", str(exc), parent=self.app)
+        except WorkbookError as exc:
+            messagebox.showerror("Tableur", str(exc), parent=self)
+        else:
+            self.destroy()
 
 
 class ReviewTab(ttk.Frame):
@@ -633,7 +757,7 @@ class App(tk.Tk):
         ttk.Label(top, text="Tableur :").pack(side="left")
         self.path_var = tk.StringVar(value="aucun")
         ttk.Label(top, textvariable=self.path_var, foreground="#333").pack(side="left", padx=(4, 8))
-        ttk.Button(top, text="Ouvrir…", command=self.choose_workbook).pack(side="left")
+        ttk.Button(top, text="Changer de fichier…", command=self.choose_workbook).pack(side="left")
         ttk.Button(top, text="Recharger", command=self.reload_workbook).pack(side="left", padx=4)
         ttk.Button(top, text="Modifier dans Excel", command=self.open_in_excel).pack(side="left")
         ttk.Button(top, text="Enregistrer une copie…", command=self.save_workbook_copy).pack(side="left", padx=4)
@@ -646,6 +770,7 @@ class App(tk.Tk):
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10)
+        self.table_tab = TableTab(self.notebook, self)
         self.send_tab = MailTab(self.notebook, self, MODE_SEND)
         self.followup_tab = MailTab(self.notebook, self, MODE_FOLLOWUP)
         self.review_tab = ReviewTab(self.notebook, self)
@@ -653,6 +778,7 @@ class App(tk.Tk):
         self.log_text = tk.Text(log_frame, wrap="word", state="disabled", font=self.text_font,
                                 relief="solid", borderwidth=1, padx=8, pady=6)
         self.log_text.pack(fill="both", expand=True)
+        self.notebook.add(self.table_tab, text="  Tableur  ")
         self.notebook.add(self.send_tab, text="  Envoyer  ")
         self.notebook.add(self.followup_tab, text="  À relancer  ")
         self.notebook.add(self.review_tab, text="  À valider  ")
@@ -784,9 +910,22 @@ class App(tk.Tk):
             return
         self.status_var.set(f"Copie enregistrée : {target}")
 
+    def save_cell(self, row: int, column: Column, text: str) -> None:
+        """Write one edit to the file. Raises WorkbookError, shown by the editing window."""
+        if self.busy:
+            raise WorkbookError("Une opération est en cours : réessaie dans quelques secondes.")
+        try:
+            self.workbook.edit_cell(row, column, text)
+        except WorkbookChanged:
+            self.refresh_tabs()
+            raise
+        self.refresh_tabs()
+        self.status_var.set(f"{self.workbook.by_row(row).company} : « {column.title} » enregistré dans le fichier.")
+
     def refresh_tabs(self) -> None:
         if not self.workbook:
             return
+        self.table_tab.refresh(self.workbook)
         for tab in (self.send_tab, self.followup_tab):
             tab.refresh(tab.wanted_rows(self.workbook))
         n = len(self.followup_tab.rows)

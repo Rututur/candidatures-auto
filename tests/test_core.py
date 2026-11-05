@@ -167,6 +167,19 @@ class WorkbookLocked(Exception):
     pass
 
 
+class TableTabTest(unittest.TestCase):
+    def test_click_on_the_edge_of_a_cell_selects_that_cell_column(self):
+        from app import gui
+
+        tab = mock.Mock()
+        tab.app.workbook.table_columns = ["first", "second"]
+        tab.tree.bbox.side_effect = lambda row, column: {"#1": (0, 25, 100, 20), "#2": (100, 25, 100, 20)}[column]
+        self.assertEqual(gui.TableTab._column_at(tab, "5", 99), "first")
+        self.assertEqual(gui.TableTab._column_at(tab, "5", 100), "second")
+        self.assertEqual(gui.TableTab._column_at(tab, "5", 103), "second")
+        self.assertIsNone(gui.TableTab._column_at(tab, "5", 200))  # right of the last column
+
+
 class SelectTest(unittest.TestCase):
     def client_with_select_answer(self, data):
         client = gmail.GmailClient(ME, "x")

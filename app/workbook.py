@@ -56,8 +56,10 @@ FIELD_ALIASES = {
     "notes": ["notes", "commentaires", "remarques", "note"],
     "letter_file": ["fichier lettre (pdf)", "fichier lettre", "lettre (pdf)"],
     "followup_sent": ["relance envoyee le", "date de la relance envoyee"],
+    "action": ["action"],
 }
 REQUIRED_FIELDS = ("company", "email")
+DATE_FIELDS = {"contact_date", "reply_date", "followup_sent"}
 # Columns created when missing (header text, is a date column).
 CREATABLE_FIELDS = {
     "contact_mode": ("Mode de contact", False),
@@ -77,8 +79,20 @@ def _covers(sqref, letter: str) -> bool:
     return any(part.split(":")[0].rstrip("0123456789") == letter for part in str(sqref).split())
 
 
+def _list_choices(ws, letter: str) -> list[str]:
+    """Values of the drop-down list applied to a column, if any."""
+    for dv in ws.data_validations.dataValidation:
+        if dv.type == "list" and dv.formula1 and dv.formula1.startswith('"') and _covers(dv.sqref, letter):
+            return dv.formula1.strip('"').split(",")
+    return []
+
+
 class WorkbookError(Exception):
     """Errors shown as-is to the user (French)."""
+
+
+class WorkbookChanged(WorkbookError):
+    """The file changed on disk since it was loaded, so row numbers may be out of date."""
 
 
 def normalize(text) -> str:
@@ -147,6 +161,19 @@ class Row:
         return self.has_valid_email and self.status in SENDABLE_STATUSES
 
 
+@dataclass
+class Column:
+    """A column of the sheet, as shown in the application."""
+
+    index: int
+    title: str
+    field: str | None
+    read_only: bool  # holds formulas
+    is_date: bool
+    choices: list[str]
+    width: float
+
+
 def _find_header(ws) -> tuple[int, dict[str, int]] | None:
     for row_idx in range(1, min(ws.max_row, 20) + 1):
         columns: dict[str, int] = {}
@@ -184,6 +211,7 @@ class ApplicationWorkbook:
     def load(self) -> None:
         if not self.path.exists():
             raise WorkbookError(f"Fichier introuvable : {self.path}")
+        self._loaded_mtime = self.path.stat().st_mtime_ns
         try:
             wb = openpyxl.load_workbook(self.path)
         except Exception as exc:
@@ -210,6 +238,47 @@ class ApplicationWorkbook:
                 notes=_as_text(get("notes")),
                 letter_file=_as_text(get("letter_file")),
             ))
+        self.table_columns = self._read_columns(ws)
+        self.cells = {
+            item.row: {c.index: ws.cell(item.row, c.index).value for c in self.table_columns}
+            for item in self.rows
+        }
+
+    def _read_columns(self, ws) -> list[Column]:
+        fields = {col: field for field, col in self.columns.items()}
+        result = []
+        for cell in ws[self.header_row]:
+            title = " ".join(_as_text(cell.value).split())
+            if not title:
+                continue
+            values = (ws.cell(r, cell.column).value for r in range(self.header_row + 1, ws.max_row + 1))
+            letter = get_column_letter(cell.column)
+            field = fields.get(cell.column)
+            result.append(Column(
+                index=cell.column,
+                title=title,
+                field=field,
+                read_only=any(isinstance(v, str) and v.startswith("=") for v in values),
+                is_date=field in DATE_FIELDS,
+                choices=_list_choices(ws, letter),
+                width=ws.column_dimensions[letter].width or 15,
+            ))
+        return result
+
+    def display_value(self, row: int, column: Column) -> str:
+        """Text shown for a cell. The file keeps no formula results, so known ones are computed."""
+        item = self.by_row(row)
+        if column.read_only:
+            if column.field == "followup_date":
+                due = item.followup_due(self.reminder_days)
+                return due.strftime("%d/%m/%Y") if due else ""
+            if column.field == "action":
+                return "À relancer" if item.needs_followup(self.reminder_days) else ""
+            return "(formule)"
+        value = self.cells[row][column.index]
+        if isinstance(value, (date, datetime)):
+            return value.strftime("%d/%m/%Y")
+        return _as_text(value)
 
     def by_row(self, row: int) -> Row:
         for item in self.rows:
@@ -264,6 +333,49 @@ class ApplicationWorkbook:
                 previous = _as_text(cell.value)
                 value = f"{previous}\n{value}" if previous else value
             cell.value = value
+        self._save(wb)
+        self.load()
+
+    def _parse_input(self, row: int, column: Column, text: str):
+        text = text.strip()
+        if column.read_only:
+            raise WorkbookError(f"La colonne « {column.title} » est calculée par une formule : elle ne se modifie pas.")
+        if not text:
+            if column.field == "company":
+                raise WorkbookError("Le nom de l'entreprise ne peut pas être vide.")
+            return None
+        if column.is_date:
+            parsed = _as_date(text)
+            if parsed is None:
+                raise WorkbookError(f"« {text} » n'est pas une date valide : écris-la sous la forme jj/mm/aaaa.")
+            return parsed
+        previous = self.cells[row][column.index]
+        if isinstance(previous, (int, float)) and not isinstance(previous, bool):
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return float(text.replace(",", "."))
+                except ValueError:
+                    return text
+        return text
+
+    def edit_cell(self, row: int, column: Column, text: str) -> None:
+        """Replace one cell in the file with what the user typed."""
+        if self.path.stat().st_mtime_ns != self._loaded_mtime:
+            self.load()
+            raise WorkbookChanged(
+                "Le fichier a été modifié ailleurs, par exemple dans Excel. Le tableau vient d'être rechargé : "
+                "vérifie la ligne, puis refais ta modification."
+            )
+        value = self._parse_input(row, column, text)
+        self.check_writable()
+        wb = openpyxl.load_workbook(self.path)
+        ws, _, _ = self._locate(wb)
+        cell = ws.cell(row, column.index)
+        cell.value = value
+        if isinstance(value, date):
+            cell.number_format = DATE_FORMAT
         self._save(wb)
         self.load()
 

@@ -64,7 +64,9 @@ Il faut **Python 3.10 ou plus** (<https://www.python.org/downloads/>, coche « A
 - **Onglet À relancer** : les candidatures sans réponse depuis 7 jours (réglable). La relance est pré-remplie, elle part **dans le même fil** que le mail d'origine, et tu la modifies et la valides avant envoi.
 - **Synchroniser avec Gmail** (automatique à l'ouverture et après chaque envoi réel) : retrouve les réponses et les range dans l'onglet **À valider**. Cette étape ne change aucun statut du tableur.
 - **Onglet À valider** : pour chaque mail reçu, lis le texte (ou clique sur *Ouvrir dans Gmail*), puis clique sur **Approuver** ou choisis une autre réponse : *Refus*, *Réponse à traiter*, *Entretien prévu*, *Acceptée*, *Mail non distribué* ou *Ignorer*. C'est seulement à ce moment que le tableur est modifié. Une entreprise dont la réponse attend ta validation n'apparaît pas dans « À relancer ».
-- **Modifier dans Excel** : ouvre ton tableur. Enregistre et ferme Excel, puis clique sur **Recharger**.
+- **Onglet Tableur** : affiche ton tableur dès l'ouverture de l'application. Double-clique sur une case pour la modifier : ton fichier Excel est mis à jour aussitôt (ferme-le d'abord dans Excel). « Date de relance » et « Action » sont calculées et ne se modifient pas. Pour ajouter une ligne, utilise Excel.
+- **Modifier dans Excel** : ouvre ton tableur dans Excel. Enregistre et ferme Excel, puis clique sur **Recharger**. Si tu oublies, l'application recharge le fichier et te demande de refaire ta modification, pour éviter d'écrire sur la mauvaise ligne.
+- **Changer de fichier…** : seulement si tu veux utiliser un autre tableur. L'application rouvre toute seule le dernier utilisé.
 - **Enregistrer une copie…** : enregistre une copie du tableur où tu veux. Le fichier reste sur ton PC : il n'est jamais envoyé sur GitHub ni ailleurs.
 
 ### Ce que l'outil change dans ton tableur
@@ -74,7 +76,7 @@ Il faut **Python 3.10 ou plus** (<https://www.python.org/downloads/>, coche « A
 - **Quand tu valides une réponse** : le statut devient celui que tu as choisi, la date de réponse est remplie si elle est vide, et une note `[Validé …]` est ajoutée. *Mail non distribué* ajoute seulement une note. *Ignorer* ne change rien au tableur, et la relance reste prévue. Les notes `[Auto …]` viennent d'une ancienne version : si tu ignores une de ces réponses, son statut est annulé.
 - **Date de relance** = dernier envoi (candidature ou relance) + 7 jours. Avant, c'était date de contact + 10 jours.
 - Une copie `… (sauvegarde auto).xlsx` est faite avant la première modification de chaque session.
-- **Ferme le fichier dans Excel** avant d'envoyer, sinon il ne peut pas être enregistré. L'outil te prévient et te propose de réessayer.
+- **Ferme le fichier dans Excel** avant d'envoyer, de valider une réponse ou de modifier une case dans l'application, sinon il ne peut pas être enregistré. L'outil te prévient.
 
 Les candidatures déjà envoyées avant l'outil (statut `Envoyée`/`Relancée`) sont retrouvées dans tes mails envoyés à la première synchronisation et suivies comme les autres.
 
