@@ -880,6 +880,9 @@ class App(tk.Tk):
         if failed:
             hint += "\n\nLes échecs sont détaillés dans l'onglet Journal ; ces entreprises sont restées cochées."
         (messagebox.showwarning if failed else messagebox.showinfo)("Envoi terminé", summary + hint)
+        # Label any mail Gmail had not indexed in time: the watcher only tracks labelled mails.
+        if sent and not test:
+            self.run_sync(silent=True)
 
 
 def main() -> None:

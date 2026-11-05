@@ -125,6 +125,23 @@ def mailbox():
     ])
 
 
+class BatchDoneTest(unittest.TestCase):
+    def finish_batch(self, sent, test):
+        from app import gui
+
+        app = mock.Mock()
+        with mock.patch.object(gui, "messagebox"):
+            gui.App._batch_done(app, gui.MODE_SEND, sent, 0, test)
+        return app
+
+    def test_real_batch_syncs_to_catch_up_missing_labels(self):
+        self.finish_batch(sent=3, test=False).run_sync.assert_called_once_with(silent=True)
+
+    def test_no_sync_after_test_batch_or_when_nothing_was_sent(self):
+        self.finish_batch(sent=3, test=True).run_sync.assert_not_called()
+        self.finish_batch(sent=0, test=False).run_sync.assert_not_called()
+
+
 class SelectTest(unittest.TestCase):
     def client_with_select_answer(self, data):
         client = gmail.GmailClient(ME, "x")
