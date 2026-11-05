@@ -9,28 +9,50 @@ from __future__ import annotations
 import os
 import queue
 import re
+import shutil
 import sys
 import threading
 import traceback
 import tkinter as tk
+import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from common.gmail import GmailClient
+from common.classify import KIND_LABELS, strip_quoted
+from common.gmail import GmailClient, gmail_thread_url
 
 from . import templates
 from .mailer import GmailSender, OutgoingMail, test_connection
 from .settings import Settings, get_password, set_password
-from .sync import SentLabeler, synchronize
-from .workbook import EMAIL_RE, ApplicationWorkbook, Row, WorkbookError
+from .sync import PendingReply, SentLabeler, record_decision, synchronize
+from .workbook import (
+    DECISION_BOUNCE,
+    DECISION_IGNORE,
+    EMAIL_RE,
+    STATUS_ACCEPTED,
+    STATUS_INTERVIEW,
+    STATUS_REFUSED,
+    STATUS_REPLIED,
+    ApplicationWorkbook,
+    Row,
+    WorkbookError,
+)
 
 MODE_SEND = "send"
 MODE_FOLLOWUP = "followup"
 FILTER_READY = "Prêtes à envoyer (statut « À contacter » ou « Lettre prête »)"
 FILTER_ALL = "Toutes les entreprises avec un email"
 CHECKED, UNCHECKED = "☑", "☐"
+DECISION_LABELS = {
+    STATUS_REFUSED: "Refus",
+    STATUS_REPLIED: "Réponse à traiter",
+    STATUS_INTERVIEW: "Entretien prévu",
+    STATUS_ACCEPTED: "Acceptée",
+    DECISION_BOUNCE: "Mail non distribué",
+    DECISION_IGNORE: "Ignorer (automatique ou sans rapport)",
+}
 
 
 @dataclass
@@ -153,7 +175,9 @@ class MailTab(ttk.Frame):
     def wanted_rows(self, workbook: ApplicationWorkbook) -> list[Row]:
         days = self.app.settings.reminder_days
         if self.mode == MODE_FOLLOWUP:
-            return [r for r in workbook.rows if r.needs_followup(days)]
+            # A company whose reply is still to be validated has answered: do not follow up.
+            waiting = {reply.address for reply in self.app.pending}
+            return [r for r in workbook.rows if r.needs_followup(days) and r.email not in waiting]
         if self.filter_var.get() == FILTER_ALL:
             return [r for r in workbook.rows if r.has_valid_email]
         return [r for r in workbook.rows if r.can_be_sent]
@@ -305,6 +329,119 @@ class MailTab(ttk.Frame):
     def uncheck(self, row_id: int) -> None:
         if row_id in self.drafts:
             self.drafts[row_id].checked = False
+
+
+class ReviewTab(ttk.Frame):
+    """Replies waiting for a decision: the estimate only applies once the user approves it."""
+
+    def __init__(self, master, app: "App"):
+        super().__init__(master, padding=8)
+        self.app = app
+        self.replies: dict[int, PendingReply] = {}
+        self.current: int | None = None
+
+        paned = ttk.Panedwindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True)
+
+        # -- left: list ---------------------------------------------------
+        left = ttk.Frame(paned)
+        paned.add(left, weight=1)
+        ttk.Label(left, text="Le tableur ne change que lorsque tu valides une réponse.",
+                  foreground="#555").pack(anchor="w", pady=(0, 6))
+        list_frame = ttk.Frame(left)
+        list_frame.pack(fill="both", expand=True)
+        columns = [("company", "Entreprise", 170), ("received", "Reçu le", 80), ("estimate", "Estimation", 210)]
+        self.tree = ttk.Treeview(list_frame, columns=[c[0] for c in columns], show="headings", selectmode="browse")
+        for key, title, width in columns:
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=width, minwidth=30, anchor="center" if key == "received" else "w")
+        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        # -- right: the mail and the decision ---------------------------------
+        right = ttk.Frame(paned, padding=(10, 0, 0, 0))
+        paned.add(right, weight=1)
+        self.title_label = ttk.Label(right, style="Title.TLabel")
+        self.title_label.pack(anchor="w")
+        self.info_label = ttk.Label(right, foreground="#555", justify="left", wraplength=520)
+        self.info_label.pack(anchor="w", pady=(2, 6))
+
+        text_frame = ttk.Frame(right)
+        text_frame.pack(fill="both", expand=True)
+        self.body = tk.Text(text_frame, wrap="word", state="disabled", height=14, font=app.text_font,
+                            relief="solid", borderwidth=1, padx=8, pady=6)
+        body_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.body.yview)
+        self.body.configure(yscrollcommand=body_scroll.set)
+        self.body.pack(side="left", fill="both", expand=True)
+        body_scroll.pack(side="right", fill="y")
+
+        self.gmail_button = ttk.Button(right, text="Ouvrir dans Gmail", command=self._open_in_gmail)
+        self.gmail_button.pack(anchor="e", pady=6)
+        self.approve_button = ttk.Button(right, style="Accent.TButton", command=self._approve)
+        self.approve_button.pack(fill="x", ipady=4)
+        ttk.Label(right, text="Ou corrige l'estimation :").pack(anchor="w", pady=(8, 2))
+        self.correction_buttons: dict[str, ttk.Button] = {}
+        grid = ttk.Frame(right)
+        grid.pack(fill="x")
+        for index, (decision, label) in enumerate(DECISION_LABELS.items()):
+            button = ttk.Button(grid, text=label, command=lambda d=decision: self._decide(d))
+            button.grid(row=index // 2, column=index % 2, sticky="ew", padx=2, pady=2)
+            self.correction_buttons[decision] = button
+        grid.columnconfigure((0, 1), weight=1, uniform="decisions")
+        self._show(None)
+
+    def refresh(self, replies: list[PendingReply]) -> None:
+        self.replies = {r.uid: r for r in replies}
+        self.tree.delete(*self.tree.get_children())
+        for reply in replies:
+            self.tree.insert("", "end", iid=str(reply.uid),
+                             values=[reply.company, fmt_date(reply.received), KIND_LABELS[reply.kind]])
+        # Keep the current mail selected, otherwise move on to the next one.
+        if self.current not in self.replies:
+            self.current = replies[0].uid if replies else None
+        if self.current is None:
+            self._show(None)
+        else:
+            self.tree.selection_set(str(self.current))
+            self._show(self.replies[self.current])
+
+    def _on_select(self, _event=None) -> None:
+        selection = self.tree.selection()
+        if selection and int(selection[0]) != self.current:
+            self.current = int(selection[0])
+            self._show(self.replies[self.current])
+
+    def _show(self, reply: PendingReply | None) -> None:
+        state = ["!disabled"] if reply else ["disabled"]
+        for button in (self.gmail_button, self.approve_button, *self.correction_buttons.values()):
+            button.state(state)
+        self.title_label.configure(text=reply.company if reply else "Aucune réponse à valider")
+        self.info_label.configure(text=(
+            f"De : {reply.sender}\nObjet : {reply.subject or '(sans objet)'}\nReçu le : {fmt_date(reply.received)}"
+            if reply else ""
+        ))
+        self.approve_button.configure(
+            text=f"Approuver : {DECISION_LABELS[reply.suggestion]}" if reply else "Approuver")
+        self.body.configure(state="normal")
+        self.body.delete("1.0", "end")
+        if reply:
+            self.body.insert("1.0", strip_quoted(reply.text) or reply.text)
+        self.body.configure(state="disabled")
+
+    def _open_in_gmail(self) -> None:
+        if self.current is not None:
+            webbrowser.open(gmail_thread_url(self.app.settings.gmail_address, self.replies[self.current].thread_id))
+
+    def _approve(self) -> None:
+        if self.current is not None:
+            self._decide(self.replies[self.current].suggestion)
+
+    def _decide(self, decision: str) -> None:
+        if self.current is not None:
+            self.app.decide(self.replies[self.current], decision)
 
 
 class SettingsDialog(tk.Toplevel):
@@ -461,6 +598,7 @@ class App(tk.Tk):
         self.password = get_password(self.settings.gmail_address)
         self.workbook: ApplicationWorkbook | None = None
         self.applications: dict = {}
+        self.pending: list[PendingReply] = []
         self.events: queue.Queue = queue.Queue()
         self.busy = False
         self.cancel_event = threading.Event()
@@ -497,6 +635,8 @@ class App(tk.Tk):
         ttk.Label(top, textvariable=self.path_var, foreground="#333").pack(side="left", padx=(4, 8))
         ttk.Button(top, text="Ouvrir…", command=self.choose_workbook).pack(side="left")
         ttk.Button(top, text="Recharger", command=self.reload_workbook).pack(side="left", padx=4)
+        ttk.Button(top, text="Modifier dans Excel", command=self.open_in_excel).pack(side="left")
+        ttk.Button(top, text="Enregistrer une copie…", command=self.save_workbook_copy).pack(side="left", padx=4)
         self.sync_button = ttk.Button(top, text="Synchroniser avec Gmail", command=lambda: self.run_sync(False))
         self.sync_button.pack(side="left", padx=4)
         ttk.Button(top, text="Réglages", command=lambda: SettingsDialog(self)).pack(side="right")
@@ -508,12 +648,14 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True, padx=10)
         self.send_tab = MailTab(self.notebook, self, MODE_SEND)
         self.followup_tab = MailTab(self.notebook, self, MODE_FOLLOWUP)
+        self.review_tab = ReviewTab(self.notebook, self)
         log_frame = ttk.Frame(self.notebook, padding=8)
         self.log_text = tk.Text(log_frame, wrap="word", state="disabled", font=self.text_font,
                                 relief="solid", borderwidth=1, padx=8, pady=6)
         self.log_text.pack(fill="both", expand=True)
         self.notebook.add(self.send_tab, text="  Envoyer  ")
         self.notebook.add(self.followup_tab, text="  À relancer  ")
+        self.notebook.add(self.review_tab, text="  À valider  ")
         self.notebook.add(log_frame, text="  Journal  ")
 
         bottom = ttk.Frame(self, padding=(10, 6))
@@ -615,6 +757,33 @@ class App(tk.Tk):
             self.refresh_tabs()
             self._append_log("Tableur rechargé.")
 
+    def open_in_excel(self) -> None:
+        if not self.workbook:
+            return
+        try:
+            os.startfile(self.workbook.path)
+        except OSError as exc:
+            messagebox.showerror("Tableur", f"Impossible d'ouvrir le fichier : {exc}")
+            return
+        self.status_var.set("Modifie le tableur, enregistre et ferme Excel, puis clique sur « Recharger ».")
+
+    def save_workbook_copy(self) -> None:
+        if not self.workbook:
+            return
+        source = self.workbook.path
+        target = filedialog.asksaveasfilename(
+            parent=self, title="Enregistrer une copie du tableur", initialfile=f"{source.stem} (copie){source.suffix}",
+            defaultextension=source.suffix, filetypes=[("Excel", f"*{source.suffix}")],
+        )
+        if not target:
+            return
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            messagebox.showerror("Tableur", f"Impossible d'enregistrer la copie : {exc}")
+            return
+        self.status_var.set(f"Copie enregistrée : {target}")
+
     def refresh_tabs(self) -> None:
         if not self.workbook:
             return
@@ -622,6 +791,9 @@ class App(tk.Tk):
             tab.refresh(tab.wanted_rows(self.workbook))
         n = len(self.followup_tab.rows)
         self.notebook.tab(self.followup_tab, text=f"  À relancer ({n})  " if n else "  À relancer  ")
+        self.review_tab.refresh(self.pending)
+        n = len(self.pending)
+        self.notebook.tab(self.review_tab, text=f"  À valider ({n})  " if n else "  À valider  ")
 
     def on_settings_changed(self) -> None:
         self.test_var.set(self.settings.test_mode)
@@ -701,15 +873,48 @@ class App(tk.Tk):
                 messagebox.showerror("Synchronisation", str(error))
             return
         self.applications = report.applications
+        self.pending = report.pending
         summary = (f"Synchronisé : {len(report.applications)} candidature(s) suivie(s), "
-                   f"{report.replies_found} réponse(s) trouvée(s), {len(report.updates)} mise(s) à jour du tableur.")
+                   f"{report.replies_found} réponse(s) trouvée(s), {len(report.pending)} à valider.")
         self._append_log(summary)
         self.status_var.set(summary)
         self.refresh_tabs()
-        if report.updates:
-            messagebox.showinfo("Nouvelles réponses", "Le tableur a été mis à jour :\n\n" + "\n".join(report.updates))
+        if report.pending:
+            self.notebook.select(self.review_tab)
         elif not silent:
             messagebox.showinfo("Synchronisation", summary)
+
+    # -- reply validation ---------------------------------------------------
+    def decide(self, reply: PendingReply, decision: str) -> None:
+        if self.busy or not self.workbook:
+            return
+        self._set_busy(True, "Enregistrement de ta décision…")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(12)
+
+        def work():
+            try:
+                record_decision(self.settings.gmail_address, self.password, self.workbook, reply, decision)
+                self.events.put(("call", self._decision_done, reply, decision, None))
+            except Exception as exc:
+                self.events.put(("call", self._decision_done, reply, decision, exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _decision_done(self, reply: PendingReply, decision: str, error) -> None:
+        self.progress.stop()
+        self.progress.configure(mode="determinate")
+        self._set_busy(False)
+        if error:
+            self._append_log(f"Décision non enregistrée pour {reply.company} : {error}")
+            self.status_var.set("Décision non enregistrée (voir Journal).")
+            messagebox.showerror("Validation", str(error))
+            return
+        self.pending = [r for r in self.pending if r.uid != reply.uid]
+        summary = f"{reply.company} : {DECISION_LABELS[decision]} enregistré."
+        self._append_log(summary)
+        self.status_var.set(summary)
+        self.refresh_tabs()
 
     # -- batch sending ------------------------------------------------------
     def _validate(self, mode: str, items) -> list[str]:

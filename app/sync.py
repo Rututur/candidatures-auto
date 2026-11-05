@@ -1,19 +1,57 @@
-"""Synchronise the spreadsheet with Gmail (run when the app opens and on demand)."""
+"""Synchronise with Gmail (run when the app opens and on demand).
+
+Replies never change the spreadsheet on their own: they are listed with an
+estimate, and only the user's decision updates the sheet. A decided mail gets
+LABEL_VALIDATED, so it is not proposed again.
+"""
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable
 
-from common.classify import KIND_AUTO, KIND_BOUNCE, classify
-from common.gmail import LABEL_AUTO_REPLY, LABEL_SENT, GmailClient
-from common.tracking import SentApplication, find_replies, load_applications
+from common.classify import KIND_AUTO, KIND_BOUNCE, KIND_POSITIVE, KIND_REFUSAL, KIND_UNKNOWN, classify
+from common.gmail import LABEL_AUTO_REPLY, LABEL_SENT, LABEL_VALIDATED, GmailClient
+from common.tracking import Reply, SentApplication, find_replies, load_applications
 
-from .workbook import SENDABLE_STATUSES, WAITING_STATUSES, ApplicationWorkbook
+from .workbook import (
+    DECISION_BOUNCE,
+    DECISION_IGNORE,
+    STATUS_REFUSED,
+    STATUS_REPLIED,
+    WAITING_STATUSES,
+    ApplicationWorkbook,
+)
 
 Log = Callable[[str], None]
+
+SUGGESTED_DECISIONS = {
+    KIND_REFUSAL: STATUS_REFUSED,
+    KIND_POSITIVE: STATUS_REPLIED,
+    KIND_UNKNOWN: STATUS_REPLIED,
+    KIND_AUTO: DECISION_IGNORE,
+    KIND_BOUNCE: DECISION_BOUNCE,
+}
+
+
+@dataclass
+class PendingReply:
+    """A reply waiting for the user's decision."""
+
+    uid: int  # in the All Mail folder
+    thread_id: int
+    address: str  # the application's address, which links the reply to the sheet
+    company: str
+    sender: str
+    subject: str
+    received: date
+    text: str
+    kind: str
+
+    @property
+    def suggestion(self) -> str:
+        return SUGGESTED_DECISIONS[self.kind]
 
 
 @dataclass
@@ -21,7 +59,7 @@ class SyncReport:
     applications: dict[str, SentApplication] = field(default_factory=dict)
     legacy_labelled: int = 0
     replies_found: int = 0
-    updates: list[str] = field(default_factory=list)
+    pending: list[PendingReply] = field(default_factory=list)
 
 
 class SentLabeler:
@@ -64,7 +102,22 @@ def label_legacy_applications(client: GmailClient, workbook: ApplicationWorkbook
     return count
 
 
-_kind_cache: dict[tuple[int, int], str] = {}
+def _pending_reply(client: GmailClient, workbook: ApplicationWorkbook, reply: Reply) -> PendingReply:
+    msg = reply.message
+    address = reply.application.address
+    rows = workbook.by_email(address)
+    text = client.fetch_text(msg.uid)
+    return PendingReply(
+        uid=msg.uid,
+        thread_id=msg.thread_id,
+        address=address,
+        company=rows[0].company if rows else reply.application.name,
+        sender=f"{msg.from_name} <{msg.from_addr}>" if msg.from_name else msg.from_addr,
+        subject=msg.subject,
+        received=msg.date.astimezone().date() if msg.date else date.today(),
+        text=text,
+        kind=classify(text, msg.from_addr, msg.subject, msg.auto_submitted).kind,
+    )
 
 
 def synchronize(address: str, password: str, workbook: ApplicationWorkbook, log: Log) -> SyncReport:
@@ -77,34 +130,27 @@ def synchronize(address: str, password: str, workbook: ApplicationWorkbook, log:
             applications = load_applications(client)
         report.applications = applications
 
-        replies = find_replies(client, applications)
+        replies = find_replies(client, applications)  # leaves All Mail selected
         report.replies_found = len(replies)
-        grouped = defaultdict(list)
-        for reply in replies:
-            grouped[reply.application.address].append(reply)
-
-        for address_, items in grouped.items():
-            for row in workbook.by_email(address_):
-                if row.reply_date is not None or row.status not in WAITING_STATUSES | SENDABLE_STATUSES:
-                    continue
-                for reply in items:
-                    msg = reply.message
-                    received = msg.date.astimezone().date() if msg.date else date.today()
-                    if row.contact_date and received < row.contact_date:
-                        continue
-                    key = (msg.gm_msgid, msg.uid)
-                    if LABEL_AUTO_REPLY in msg.labels:
-                        kind = KIND_AUTO
-                    elif key in _kind_cache:
-                        kind = _kind_cache[key]
-                    else:
-                        text = client.fetch_text(msg.uid)
-                        kind = _kind_cache[key] = classify(text, msg.from_addr, msg.subject, msg.auto_submitted).kind
-                    result = workbook.apply_reply(row.row, kind, received, msg.subject)
-                    if result:
-                        report.updates.append(f"{row.company} : {result}")
-                        log(f"Tableur mis à jour — {row.company} : {result}")
-                        row = workbook.by_row(row.row)
-                    if kind not in (KIND_AUTO, KIND_BOUNCE) and result:
-                        break
+        report.pending = [
+            _pending_reply(client, workbook, reply)
+            for reply in replies
+            if LABEL_VALIDATED not in reply.message.labels
+        ]
     return report
+
+
+def record_decision(address: str, password: str, workbook: ApplicationWorkbook,
+                    reply: PendingReply, decision: str) -> None:
+    """Update the sheet, then label the mail in Gmail so it is not proposed again."""
+    workbook.check_writable()
+    for row in workbook.by_email(reply.address):
+        workbook.apply_decision(row.row, decision, reply.received, reply.subject)
+    with GmailClient(address, password) as client:
+        client.select(client.special_folder("\\All"), readonly=False)
+        client.add_label([reply.uid], LABEL_VALIDATED)
+        # The watcher keeps sending follow-up reminders for mails labelled as automatic.
+        if decision == DECISION_IGNORE:
+            client.add_label([reply.uid], LABEL_AUTO_REPLY)
+        else:
+            client.remove_label([reply.uid], LABEL_AUTO_REPLY)

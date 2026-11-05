@@ -39,6 +39,10 @@ SENDABLE_STATUSES = {"", STATUS_TO_CONTACT, STATUS_LETTER_READY}
 WAITING_STATUSES = {STATUS_SENT, STATUS_FOLLOWED_UP}
 REPLY_FILL = "FFD0F0EC"
 
+# What the user can decide about a reply: one of these, or a status to apply.
+DECISION_BOUNCE = "bounce"
+DECISION_IGNORE = "ignore"
+
 FIELD_ALIASES = {
     "company": ["entreprise", "societe", "structure", "organisme", "employeur"],
     "email": ["email", "e-mail", "mail", "courriel", "adresse mail", "adresse email", "adresse e-mail"],
@@ -283,25 +287,27 @@ class ApplicationWorkbook:
     def mark_followed_up(self, row: int, when: date) -> None:
         self.update(row, {"status": STATUS_FOLLOWED_UP, "followup_sent": when})
 
-    def apply_reply(self, row: int, kind: str, when: date, subject: str) -> str | None:
-        """Record a detected answer. Returns a short description, or None if nothing changed."""
-        from common.classify import KIND_AUTO, KIND_BOUNCE, KIND_LABELS, KIND_REFUSAL
-
+    def apply_decision(self, row: int, decision: str, when: date, subject: str) -> None:
+        """Record what the user decided about the reply received on `when`."""
         item = self.by_row(row)
-        stamp = f"[Auto {when:%d/%m/%Y}]"
-        if kind == KIND_AUTO:
-            return None
-        if kind == KIND_BOUNCE:
-            if "non distribué" in item.notes:
-                return None
+        stamp = f"[Validé {date.today():%d/%m/%Y}]"
+        mail = f"mail du {when:%d/%m/%Y}, objet : {subject or 'sans objet'}"
+        if decision == DECISION_IGNORE:
+            # Older versions applied their estimate directly: undo it if it came from this mail.
+            if item.reply_date == when and f"[Auto {when:%d/%m/%Y}] Réponse reçue" in item.notes:
+                self.update(row, {
+                    "status": STATUS_FOLLOWED_UP if item.followup_sent else STATUS_SENT,
+                    "reply_date": None,
+                    "notes": f"{stamp} Estimation annulée ({mail}).",
+                })
+            return
+        if decision == DECISION_BOUNCE:
             self.update(row, {"notes": f"{stamp} Mail non distribué à {item.email} : vérifie l'adresse."})
-            return "mail non distribué"
-        if item.reply_date is not None or item.status not in WAITING_STATUSES | SENDABLE_STATUSES:
-            return None
-        status = STATUS_REFUSED if kind == KIND_REFUSAL else STATUS_REPLIED
-        note = f"{stamp} Réponse reçue, estimation : {KIND_LABELS[kind].lower()} (objet : {subject or 'sans objet'}). À vérifier."
-        self.update(row, {"status": status, "reply_date": when, "notes": note})
-        return f"{status.lower()} ({KIND_LABELS[kind].lower()})"
+            return
+        changes = {"status": decision, "notes": f"{stamp} {decision} ({mail})."}
+        if item.reply_date is None:
+            changes["reply_date"] = when
+        self.update(row, changes)
 
     # -- structure upgrades (idempotent) ------------------------------
     def _upgrade(self, wb, ws, header_row: int, columns: dict[str, int]) -> dict[str, int]:

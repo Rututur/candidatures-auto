@@ -63,3 +63,7 @@ class FakeGmail:
     def add_label(self, uids, label):
         for uid in uids:
             self.messages[uid][0].labels.add(label)
+
+    def remove_label(self, uids, label):
+        for uid in uids:
+            self.messages[uid][0].labels.discard(label)

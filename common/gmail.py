@@ -28,7 +28,8 @@ LABEL_SENT = "Candidatures/Envoyees"
 LABEL_NOTIFIED = "Candidatures/Notifiees"
 LABEL_AUTO_REPLY = "Candidatures/Reponses-auto"
 LABEL_REMINDED = "Candidatures/Rappel-fait"
-ALL_LABELS = (LABEL_ROOT, LABEL_SENT, LABEL_NOTIFIED, LABEL_AUTO_REPLY, LABEL_REMINDED)
+LABEL_VALIDATED = "Candidatures/Validees"
+ALL_LABELS = (LABEL_ROOT, LABEL_SENT, LABEL_NOTIFIED, LABEL_AUTO_REPLY, LABEL_REMINDED, LABEL_VALIDATED)
 
 HEADER_FIELDS = (
     "FROM TO SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES "
@@ -320,6 +321,15 @@ class GmailClient:
             return
         self._ok(
             self.imap.uid("STORE", ",".join(map(str, uids)), "+X-GM-LABELS", f"({quote_imap(label)})"),
+            "STORE",
+        )
+
+    def remove_label(self, uids, label: str) -> None:
+        uids = sorted(set(uids))
+        if not uids:
+            return
+        self._ok(
+            self.imap.uid("STORE", ",".join(map(str, uids)), "-X-GM-LABELS", f"({quote_imap(label)})"),
             "STORE",
         )
 

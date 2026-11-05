@@ -13,7 +13,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 from app import sync
 from app.templates import render, salutation
-from app.workbook import STATUS_REPLIED, ApplicationWorkbook
+from app.workbook import (
+    DECISION_BOUNCE,
+    DECISION_IGNORE,
+    STATUS_INTERVIEW,
+    STATUS_REFUSED,
+    STATUS_REPLIED,
+    ApplicationWorkbook,
+)
+from common.gmail import LABEL_AUTO_REPLY, LABEL_VALIDATED
 from tests.fake_gmail import FakeGmail
 from tests.test_core import ME, mailbox
 
@@ -75,16 +83,76 @@ class WorkbookTest(unittest.TestCase):
         self.assertEqual(summary["B8"].value, "=SUM(B3:B7)")
         self.assertTrue((self.path.parent / "suivi (sauvegarde auto).xlsx").exists())
 
-    def test_sync_updates_rows(self):
+    def synchronize(self, wb, box):
+        with mock.patch.object(sync, "GmailClient", lambda *a: box):
+            return sync.synchronize(ME, "x", wb, log=lambda m: None)
+
+    def decide(self, wb, box, reply, decision):
+        with mock.patch.object(sync, "GmailClient", lambda *a: box):
+            sync.record_decision(ME, "x", wb, reply, decision)
+
+    def test_sync_proposes_replies_without_changing_the_sheet(self):
+        wb = ApplicationWorkbook(self.path)
+        before = self.path.read_bytes()
+        report = self.synchronize(wb, mailbox())
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual({r.uid: (r.company, r.suggestion) for r in report.pending}, {
+            10: ("Cyberscope", STATUS_REPLIED),
+            11: ("Ceralis", DECISION_BOUNCE),
+            12: ("Evolusite", DECISION_IGNORE),
+        })
+
+    def test_correcting_the_estimate_updates_the_sheet_and_the_labels(self):
         wb = ApplicationWorkbook(self.path)
         box = mailbox()
-        with mock.patch.object(sync, "GmailClient", lambda *a: box):
-            report = sync.synchronize(ME, "x", wb, log=lambda m: None)
-        statuses = {r.company: (r.status, r.reply_date is not None) for r in wb.rows}
-        self.assertEqual(statuses["Cyberscope"], (STATUS_REPLIED, True))
-        self.assertEqual(statuses["Ceralis"][0], "Envoyée")  # bounce: note only
-        self.assertIn("non distribué", wb.by_email("contact@ceralis.fr")[0].notes)
-        self.assertEqual(len(report.updates), 2)
+        box.messages[10][0].labels.add(LABEL_AUTO_REPLY)
+        reply = next(r for r in self.synchronize(wb, box).pending if r.uid == 10)
+        self.assertEqual(reply.suggestion, STATUS_REPLIED)
+
+        self.decide(wb, box, reply, STATUS_REFUSED)
+
+        row = wb.by_email("contact@cyberscope.fr")[0]
+        self.assertEqual((row.status, row.reply_date), (STATUS_REFUSED, reply.received))
+        self.assertIn("[Validé", row.notes)
+        self.assertIn(LABEL_VALIDATED, box.messages[10][0].labels)
+        self.assertNotIn(LABEL_AUTO_REPLY, box.messages[10][0].labels)
+        self.assertNotIn(10, [r.uid for r in self.synchronize(wb, box).pending])
+
+    def test_second_decision_keeps_the_first_reply_date(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        wb.apply_decision(row, STATUS_REPLIED, date(2026, 11, 1), "Premier mail")
+        wb.apply_decision(row, STATUS_INTERVIEW, date(2026, 11, 3), "Second mail")
+        item = wb.by_row(row)
+        self.assertEqual((item.status, item.reply_date), (STATUS_INTERVIEW, date(2026, 11, 1)))
+
+    def test_bounce_only_adds_a_note(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@ceralis.fr")[0].row
+        wb.apply_decision(row, DECISION_BOUNCE, date(2026, 11, 1), "Échec")
+        item = wb.by_row(row)
+        self.assertEqual((item.status, item.reply_date), ("Envoyée", None))
+        self.assertIn("non distribué", item.notes)
+
+    def test_ignoring_a_reply_keeps_reminders_and_the_sheet(self):
+        wb = ApplicationWorkbook(self.path)
+        box = mailbox()
+        reply = next(r for r in self.synchronize(wb, box).pending if r.uid == 10)
+        before = self.path.read_bytes()
+        self.decide(wb, box, reply, DECISION_IGNORE)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertTrue({LABEL_VALIDATED, LABEL_AUTO_REPLY} <= box.messages[10][0].labels)
+
+    def test_ignoring_undoes_an_estimate_applied_by_an_older_version(self):
+        wb = ApplicationWorkbook(self.path)
+        row = wb.by_email("contact@cyberscope.fr")[0].row
+        when = date(2026, 11, 1)
+        wb.update(row, {"status": STATUS_REFUSED, "reply_date": when,
+                        "notes": "[Auto 01/11/2026] Réponse reçue, estimation : refus probable. À vérifier."})
+        wb.apply_decision(row, DECISION_IGNORE, when, "Accusé")
+        item = wb.by_row(row)
+        self.assertEqual((item.status, item.reply_date), ("Envoyée", None))
+        self.assertIn("Estimation annulée", item.notes)
 
     def test_legacy_applications_get_labelled(self):
         wb = ApplicationWorkbook(self.path)

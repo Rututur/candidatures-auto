@@ -29,6 +29,7 @@ from common.gmail import (
     LABEL_NOTIFIED,
     LABEL_REMINDED,
     LABEL_SENT,
+    LABEL_VALIDATED,
     FolderNotFound,
     GmailClient,
     GmailError,
@@ -83,7 +84,7 @@ def reply_embed(reply: Reply, kind: str, account: str) -> dict:
             {"name": "Reçu le", "value": local(msg.date), "inline": True},
             {"name": "De", "value": sender[:1024], "inline": False},
         ],
-        "footer": {"text": "Estimation automatique : lis le mail pour en être sûr. Le titre ouvre Gmail."},
+        "footer": {"text": "Estimation automatique : à valider dans l'onglet « À valider » de l'application. Le titre ouvre Gmail."},
     }
 
 
@@ -144,6 +145,10 @@ def run() -> int:
         answered: set[str] = set()
         for reply in replies:
             msg = reply.message
+            if LABEL_VALIDATED in msg.labels:  # the user's decision replaces any estimate
+                if LABEL_AUTO_REPLY not in msg.labels:
+                    answered.add(reply.application.address)
+                continue
             if LABEL_NOTIFIED in msg.labels:
                 if LABEL_AUTO_REPLY not in msg.labels and not msg.auto_submitted:
                     answered.add(reply.application.address)

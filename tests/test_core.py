@@ -14,7 +14,7 @@ from unittest import mock
 
 from common import gmail
 from common.classify import KIND_AUTO, KIND_BOUNCE, KIND_POSITIVE, KIND_REFUSAL, KIND_UNKNOWN, classify, strip_quoted
-from common.gmail import LABEL_NOTIFIED, LABEL_REMINDED, LABEL_SENT, MessageInfo
+from common.gmail import LABEL_AUTO_REPLY, LABEL_NOTIFIED, LABEL_REMINDED, LABEL_SENT, LABEL_VALIDATED, MessageInfo
 from common.tracking import find_replies, load_applications
 from tests.fake_gmail import FakeGmail
 
@@ -142,6 +142,31 @@ class BatchDoneTest(unittest.TestCase):
         self.finish_batch(sent=0, test=False).run_sync.assert_not_called()
 
 
+class ReviewFlowTest(unittest.TestCase):
+    def test_failed_decision_keeps_the_reply_pending(self):
+        from app import gui
+
+        reply = mock.Mock(uid=1, company="Sodebo")
+        app = mock.Mock(pending=[reply])
+        with mock.patch.object(gui, "messagebox") as box:
+            gui.App._decision_done(app, reply, gui.STATUS_REFUSED, WorkbookLocked("Excel"))
+        box.showerror.assert_called_once()
+        self.assertEqual(app.pending, [reply])
+
+    def test_recorded_decision_removes_the_reply(self):
+        from app import gui
+
+        reply = mock.Mock(uid=1, company="Sodebo")
+        app = mock.Mock(pending=[reply])
+        gui.App._decision_done(app, reply, gui.STATUS_REFUSED, None)
+        self.assertEqual(app.pending, [])
+        app.refresh_tabs.assert_called_once()
+
+
+class WorkbookLocked(Exception):
+    pass
+
+
 class SelectTest(unittest.TestCase):
     def client_with_select_answer(self, data):
         client = gmail.GmailClient(ME, "x")
@@ -220,6 +245,19 @@ class WatcherTest(unittest.TestCase):
         # Second run: nothing new to say.
         sent_again, _ = self.run_watcher(box)
         self.assertEqual(sent_again, [])
+
+    def test_user_decision_replaces_the_estimate(self):
+        box = mailbox()
+        # Marked as a real answer by the user, although the mail looks automatic.
+        box.messages[12][0].labels.add(LABEL_VALIDATED)
+        # Ignored by the user, although the estimate says this is a positive answer.
+        box.messages[10][0].labels.update({LABEL_VALIDATED, LABEL_AUTO_REPLY})
+        sent, _ = self.run_watcher(box)
+        titles = [e["title"] for e in sent]
+        self.assertNotIn("📬 Réponse de Cyberscope", titles)  # already seen by the user
+        self.assertNotIn("⏰ À relancer : Evolusite", titles)  # really answered
+        self.assertIn("⏰ À relancer : Cyberscope", titles)  # still waiting for an answer
+        self.assertNotIn(LABEL_NOTIFIED, box.messages[12][0].labels)
 
     def test_dry_run_on_mailbox_without_labels(self):
         from watcher import watch
