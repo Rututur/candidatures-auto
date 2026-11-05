@@ -76,6 +76,22 @@ class ImapParsingTest(unittest.TestCase):
         self.assertEqual(info.subject, "Réponse candidature")
         self.assertTrue(info.auto_submitted)
 
+    def test_sender_with_special_characters_in_encoded_name(self):
+        meta = "1 (X-GM-THRID 5 X-GM-MSGID 6 X-GM-LABELS () UID 42 BODY[HEADER.FIELDS (FROM)] {1}"
+        senders = {
+            "=?utf-8?q?Lef=C3=A8vre=2C_Marie?= <rh@sodebo.fr>": "Lefèvre, Marie",
+            "=?utf-8?q?rh=40sodebo=2Efr_=C3=A9quipe?= <rh@sodebo.fr>": "rh@sodebo.fr équipe",
+            "=?utf-8?q?Sodebo=3B_RH_=C3=A9quipe?= <rh@sodebo.fr>": "Sodebo; RH équipe",
+            "=?utf-8?q?Mich=C3=A8le?= =?utf-8?q?_Dupont=2C_RH?= <rh@sodebo.fr>": "Michèle Dupont, RH",
+            "Marie Dupont <rh@sodebo.fr>": "Marie Dupont",
+            "rh@sodebo.fr": "",
+        }
+        for header, name in senders.items():
+            with self.subTest(header=header):
+                info = gmail.parse_header_block(42, meta, f"From: {header}\r\n\r\n".encode())
+                self.assertEqual(info.from_addr, "rh@sodebo.fr")
+                self.assertEqual(info.from_name, name)
+
     def test_special_folder_from_list(self):
         client = gmail.GmailClient(ME, "x")
         client.imap = mock.Mock()

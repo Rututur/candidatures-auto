@@ -113,7 +113,8 @@ def _is_auto_submitted(msg: Message) -> bool:
 
 def parse_header_block(uid: int, meta: str, raw_headers: bytes) -> MessageInfo:
     msg = email.message_from_bytes(raw_headers)
-    from_name, from_addr = parseaddr(decode_mime_header(msg.get("From")))
+    # Split the address before decoding the name: a decoded comma or "@" would break parsing.
+    from_name, from_addr = parseaddr(str(msg.get("From", "")))
     to = [
         (decode_mime_header(name), addr.lower())
         for name, addr in getaddresses([msg.get("To", ""), msg.get("Cc", "")])
@@ -125,7 +126,7 @@ def parse_header_block(uid: int, meta: str, raw_headers: bytes) -> MessageInfo:
         thread_id=_parse_int(meta, "X-GM-THRID"),
         gm_msgid=_parse_int(meta, "X-GM-MSGID"),
         labels=_parse_labels(meta),
-        from_name=from_name,
+        from_name=decode_mime_header(from_name),
         from_addr=from_addr.lower(),
         to=to,
         subject=decode_mime_header(msg.get("Subject")),
