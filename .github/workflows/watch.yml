@@ -2,7 +2,9 @@ name: Surveillance des réponses
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes (GitHub may delay runs a little)
+    # Every 10 minutes, off the round minutes: GitHub delays or drops runs most
+    # often at the start of the hour. Runs can still be hours late.
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:          # "Run workflow" button, handy for testing
 
 permissions:
